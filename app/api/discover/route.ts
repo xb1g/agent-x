@@ -11,8 +11,20 @@ import {
   upsertChunks,
   chunkText,
   getSegment,
+  addLog,
 } from '../../../lib/db'
 import { MOCK_PERSONA } from '../../../lib/mockData'
+
+function deriveProvisionalName(icp: string): string {
+  // Extract first 2-3 meaningful words from ICP description
+  const words = icp.replace(/[^a-zA-Z\s]/g, '').split(/\s+/).filter(Boolean)
+  // Skip common stop words
+  const stops = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'of', 'in', 'on', 'at', 'to', 'is', 'are', 'with'])
+  const significant = words.filter(w => !stops.has(w.toLowerCase())).slice(0, 2)
+  if (!significant.length) return 'Persona'
+  // Capitalize each
+  return significant.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+}
 
 export const maxDuration = 300
 const HAS_GEMINI_KEY =
@@ -106,7 +118,8 @@ export async function POST(req: Request) {
   })
 
   try {
-    const segment_id = await createSegment(icp_description, subreddits)
+    const provisional_name = deriveProvisionalName(icp_description)
+    const segment_id = await createSegment(icp_description, subreddits, provisional_name)
     console.log('[api/discover] segment_created', { segment_id })
     waitUntil(runPipeline(segment_id, icp_description, subreddits))
 
@@ -136,6 +149,7 @@ async function runPipeline(
     await xpozClient.connect()
 
     console.log('[api/discover] pipeline_start', { segment_id, subreddits })
+    await addLog(segment_id, `Pipeline started · ${subreddits.length} subreddits`)
     await updateSegment(segment_id, { status: 'reading' })
     console.log('[api/discover] segment_status', { segment_id, status: 'reading' })
 
@@ -192,9 +206,11 @@ async function runPipeline(
       scoredPosts: scoredPosts.length,
       topPosts: topPosts.length,
     })
+    await addLog(segment_id, `Phase 1 complete · ${topPosts.length} posts scored`)
 
     if (!HAS_GEMINI_KEY) {
       console.warn('[api/discover] mock_persona_mode', { segment_id })
+      await addLog(segment_id, `Mock persona mode · Gemini key not configured`)
       await updateSegment(segment_id, {
         status: 'ready',
         soul_document: MOCK_PERSONA.soul_document,
@@ -237,6 +253,7 @@ async function runPipeline(
         segment_id,
         count: successfulFragments.length,
       })
+      await addLog(segment_id, `Insufficient signal · ${successfulFragments.length} fragments collected`)
       await updateSegment(segment_id, {
         status: 'failed',
         status_message:
@@ -245,6 +262,7 @@ async function runPipeline(
       return
     }
 
+    await addLog(segment_id, `Synthesis started · ${successfulFragments.length} fragments`)
     await updateSegment(segment_id, { status: 'synthesizing' })
     console.log('[api/discover] segment_status', { segment_id, status: 'synthesizing' })
 
@@ -277,8 +295,10 @@ async function runPipeline(
       segment_id,
       persona_name: synthesis.persona_name,
     })
+    await addLog(segment_id, `Persona ready · ${synthesis.persona_name}`)
   } catch (error) {
     console.error('[api/discover] pipeline_failed', { segment_id, error })
+    await addLog(segment_id, `Pipeline error · ${error instanceof Error ? error.message : 'unknown'}`)
     await updateSegment(segment_id, {
       status: 'failed',
       status_message: 'Unexpected error - please try again.',
@@ -309,6 +329,7 @@ async function deepReadPost(
     post_id: post.id,
     pain_score,
   })
+  await addLog(segment_id, `Reading post ${post.id} from r/${subreddit}`)
   const result = await getPostWithComments(post.id, xpozClient)
   if (!result) {
     console.warn('[api/discover] fetch_post_empty', {
@@ -371,6 +392,7 @@ async function deepReadPost(
       post_id,
       chunkCount: rows.length,
     })
+    await addLog(segment_id, `Embeddings saved · ${rows.length} chunks from post ${post_id}`)
   } catch (error) {
     console.error('[api/discover] embeddings_failed', {
       segment_id,
@@ -387,6 +409,11 @@ async function deepReadPost(
     post_id,
     success: Boolean(fragment),
   })
+  if (fragment) {
+    await addLog(segment_id, `Analysed post ${post_id} · fragment captured`)
+  } else {
+    await addLog(segment_id, `Analysed post ${post_id} · no fragment`)
+  }
 
   return fragment
 }

@@ -847,6 +847,29 @@ a {
   gap: 10px;
 }
 
+.segment-card__logs {
+  margin-top: 12px;
+  border-top: 1px solid var(--border, #e5e7eb);
+  padding-top: 10px;
+}
+
+.segment-card__logs-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.segment-card__log-line {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--muted, #6b7280);
+  margin: 0;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -1117,73 +1140,6 @@ a {
 
 .wizard-input::placeholder {
   color: rgba(23, 21, 17, 0.3);
-}
-
-.wizard-focus-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.wizard-focus-tile {
-  display: grid;
-  gap: 4px;
-  text-align: left;
-  padding: 13px 15px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(23, 21, 17, 0.11);
-  background: rgba(255, 255, 255, 0.72);
-  cursor: pointer;
-  transition:
-    transform 140ms ease,
-    border-color 140ms ease,
-    background-color 140ms ease,
-    box-shadow 140ms ease;
-  position: relative;
-}
-
-.wizard-focus-tile::before {
-  content: '';
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  border: 1.5px solid rgba(23, 21, 17, 0.2);
-  transition: all 140ms ease;
-}
-
-.wizard-focus-tile:hover {
-  transform: translateY(-1px);
-  border-color: rgba(45, 111, 99, 0.24);
-  background: rgba(45, 111, 99, 0.05);
-  box-shadow: 0 6px 18px rgba(45, 111, 99, 0.07);
-}
-
-.wizard-focus-tile.is-active {
-  border-color: rgba(45, 111, 99, 0.42);
-  background: rgba(45, 111, 99, 0.1);
-}
-
-.wizard-focus-tile.is-active::before {
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(45, 111, 99, 0.2);
-}
-
-.wizard-focus-tile__label {
-  font-size: 0.91rem;
-  font-weight: 650;
-  color: var(--ink);
-  letter-spacing: -0.025em;
-  padding-right: 18px;
-}
-
-.wizard-focus-tile__desc {
-  font-size: 0.78rem;
-  color: var(--muted);
-  line-height: 1.4;
 }
 
 .wizard-suggest-row {

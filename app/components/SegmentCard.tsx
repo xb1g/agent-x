@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+
 export type SegmentStatus = 'indexing' | 'reading' | 'synthesizing' | 'ready' | 'failed'
 
 export type SegmentSize = {
@@ -19,6 +21,7 @@ export type SegmentCardData = {
   segment_size: SegmentSize | null
   pain_signals: string[]
   updated_at: string
+  logs?: string[]
 }
 
 type SegmentCardProps = {
@@ -58,6 +61,8 @@ export function SegmentCard({
   onSelect,
   onChat,
 }: SegmentCardProps) {
+  const [showLogs, setShowLogs] = useState(false)
+
   return (
     <article className={`segment-card ${isSelected ? 'is-selected' : ''}`}>
       <div className="segment-card__top">
@@ -110,7 +115,23 @@ export function SegmentCard({
         <button type="button" className="primary" onClick={() => onChat?.(segment)}>
           Chat with persona
         </button>
+        {segment.logs && segment.logs.length > 0 && (
+          <button type="button" onClick={() => setShowLogs((v) => !v)}>
+            {showLogs ? 'Hide logs' : `Logs (${segment.logs.length})`}
+          </button>
+        )}
       </div>
+
+      {showLogs && segment.logs && segment.logs.length > 0 && (
+        <div className="segment-card__logs">
+          <p className="eyebrow" style={{ marginBottom: 6 }}>Agent logs</p>
+          <div className="segment-card__logs-list">
+            {[...segment.logs].reverse().map((log, i) => (
+              <p key={i} className="segment-card__log-line">{log}</p>
+            ))}
+          </div>
+        </div>
+      )}
 
       {segment.status_message ? (
         <p className="field__help" style={{ marginTop: 12 }}>

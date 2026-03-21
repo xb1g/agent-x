@@ -77,11 +77,12 @@ export function chunkText(text: string, charsPerChunk = 1200): string[] {
 
 export async function createSegment(
   icp_description: string,
-  subreddits: string[]
+  subreddits: string[],
+  provisional_name?: string
 ): Promise<string> {
   const { data, error } = await getSupabase()
     .from('segments')
-    .insert({ icp_description, subreddits, status: 'indexing' })
+    .insert({ icp_description, subreddits, status: 'indexing', persona_name: provisional_name ?? null })
     .select('id')
     .single()
 
@@ -187,4 +188,31 @@ export async function querySimilar(
       typeof row?.chunk_text === 'string' ? row.chunk_text : null
     )
     .filter((value): value is string => Boolean(value))
+}
+
+export async function addLog(segment_id: string, message: string): Promise<void> {
+  const { error } = await getSupabase()
+    .from('segment_logs')
+    .insert({ segment_id, message })
+  if (error) {
+    // Non-fatal: log to console but don't throw
+    console.error('[db] addLog_failed', { segment_id, message, error })
+  }
+}
+
+export async function getLogs(segment_id: string): Promise<string[]> {
+  const { data, error } = await getSupabase()
+    .from('segment_logs')
+    .select('message, created_at')
+    .eq('segment_id', segment_id)
+    .order('created_at', { ascending: true })
+
+  if (error || !Array.isArray(data)) {
+    return []
+  }
+
+  return data.map((row) => {
+    const ts = new Date(row.created_at as string).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return `[${ts}] ${row.message as string}`
+  })
 }

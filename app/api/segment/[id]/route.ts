@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getSegment } from '../../../../lib/db'
+import { getSegment, getLogs } from '../../../../lib/db'
 
 type SegmentRouteContext =
   | { params: { id: string } }
@@ -12,7 +12,10 @@ async function resolveParams(context: SegmentRouteContext) {
 export async function GET(_req: Request, context: SegmentRouteContext) {
   const { id } = await resolveParams(context)
   console.log('[api/segment] lookup_start', { id })
-  const segment = await getSegment(id)
+  const [segment, logs] = await Promise.all([
+    getSegment(id),
+    getLogs(id),
+  ])
 
   if (!segment) {
     console.warn('[api/segment] lookup_missing', { id })
@@ -26,5 +29,5 @@ export async function GET(_req: Request, context: SegmentRouteContext) {
     status_message: segment.status_message,
   })
 
-  return NextResponse.json(segment)
+  return NextResponse.json({ ...segment, logs })
 }

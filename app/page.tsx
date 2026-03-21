@@ -9,6 +9,8 @@ import {
   type SegmentStatus,
 } from './components/SegmentCard'
 import {
+  buildIcpDescription,
+  buildQuery,
   dedupeSubreddits,
   extractSuggestedSubreddits,
 } from '../lib/intake'
@@ -26,7 +28,10 @@ type DiscoverResponse = {
 type SegmentResponse = SegmentCardData & {
   segment_size?: SegmentCardData['segment_size']
   soul_document?: string | null
+  logs?: string[]
 }
+
+type AppTab = 'research' | 'board' | 'interview'
 
 function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -93,10 +98,43 @@ function logClient(event: string, details?: Record<string, unknown>) {
   console.log(`[discovery-intake] ${event}`, details ?? {})
 }
 
+const SUGGEST_STEPS = [
+  'Analyzing your inputs…',
+  'Connecting to Reddit…',
+  'Searching communities…',
+  'Filtering relevant results…',
+  'Preparing your shortlist…',
+]
+
+const APP_TABS: Array<{
+  id: AppTab
+  label: string
+  description: string
+}> = [
+  {
+    id: 'research',
+    label: 'Research',
+    description: 'Define the segment and launch discovery.',
+  },
+  {
+    id: 'board',
+    label: 'Board',
+    description: 'Track live segments and select a persona.',
+  },
+  {
+    id: 'interview',
+    label: 'Interview',
+    description: 'Talk to the selected persona without losing context.',
+  },
+]
+
 export default function Page() {
-  const [icpDescription, setIcpDescription] = useState(
-    'Bootstrapped SaaS founders who are frustrated with pricing, churn, and feature creep.',
+  const [activeTab, setActiveTab] = useState<AppTab>('research')
+  const [wizardCustomer, setWizardCustomer] = useState('Bootstrapped SaaS founders')
+  const [wizardProblem, setWizardProblem] = useState(
+    'pricing confusion, churn, and feature creep',
   )
+  const [suggestStep, setSuggestStep] = useState(0)
   const [subreddits, setSubreddits] = useState<string[]>([])
   const [subredditDraft, setSubredditDraft] = useState('')
   const [segments, setSegments] = useState<SegmentCardData[]>([])
@@ -106,6 +144,11 @@ export default function Page() {
   const [isSuggesting, setIsSuggesting] = useState(false)
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
+
+  const icpDescription = useMemo(
+    () => buildIcpDescription(wizardCustomer, wizardProblem),
+    [wizardCustomer, wizardProblem],
+  )
 
   const selectedSegment = useMemo(
     () => segments.find((segment) => segment.id === selectedSegmentId) ?? null,
@@ -127,6 +170,19 @@ export default function Page() {
       setSelectedSegmentId(segments[0]?.id ?? null)
     }
   }, [segments, selectedSegmentId])
+
+  // Cycle through fake progress steps while suggesting.
+  useEffect(() => {
+    if (!isSuggesting) {
+      setSuggestStep(0)
+      return
+    }
+    setSuggestStep(1)
+    const id = setInterval(() => {
+      setSuggestStep((s) => Math.min(s + 1, SUGGEST_STEPS.length))
+    }, 550)
+    return () => clearInterval(id)
+  }, [isSuggesting])
 
   useEffect(() => {
     if (!activeRunId) return
@@ -169,6 +225,7 @@ export default function Page() {
                 ? extractPainSignals(data.soul_document)
                 : ['Waiting for the first high-signal posts to surface.'],
           updated_at: new Date().toISOString(),
+          logs: data.logs ?? [],
         }
 
         startTransition(() => {
@@ -228,11 +285,16 @@ export default function Page() {
   }
 
   async function handleSuggestSubreddits() {
-    const trimmed = icpDescription.trim()
-    if (!trimmed) return
+    const query = buildQuery(wizardCustomer, wizardProblem)
+    if (query.length < 10) {
+      setBanner('Fill in your customer and their problem to get suggestions.')
+      return
+    }
 
     logClient('suggest_start', {
-      icpLength: trimmed.length,
+      queryLength: query.length,
+      hasCustomer: !!wizardCustomer.trim(),
+      hasProblem: !!wizardProblem.trim(),
       currentShortlist: subreddits,
     })
     setIsSuggesting(true)
@@ -242,7 +304,7 @@ export default function Page() {
       const response = await fetch('/api/suggest-subreddits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ icp_description: trimmed }),
+        body: JSON.stringify({ icp_description: query }),
       })
       logClient('suggest_response', {
         ok: response.ok,
@@ -283,7 +345,7 @@ export default function Page() {
   }
 
   async function handleDiscover() {
-    const trimmed = icpDescription.trim()
+    const trimmed = icpDescription
     if (!trimmed) return
 
     const shortlist = dedupeSubreddits(subreddits)
@@ -321,6 +383,7 @@ export default function Page() {
       setSegments((current) => upsertSegment(current, tempSegment))
       setSelectedSegmentId(tempSegment.id)
     })
+    setActiveTab('board')
 
     try {
       const response = await fetch('/api/discover', {
@@ -379,273 +442,332 @@ export default function Page() {
 
   function handleResetBoard() {
     startTransition(() => {
-      setSegments([])
-      setSelectedSegmentId(null)
-      setSubreddits([])
-      setSubredditDraft('')
-      setActiveRunId(null)
-      setBanner('Board cleared.')
+      setWizardCustomer('')
+      setWizardProblem('')
+      setBanner('Research inputs cleared.')
     })
   }
 
   const liveSegments = segments
   const boardLabel = liveSegments.length > 0 ? 'Live slate' : 'Empty slate'
+  const activeTabMeta = APP_TABS.find((tab) => tab.id === activeTab) ?? APP_TABS[0]
+  const statusMessage = activeRunId
+    ? `Run active • ${formatStatus('indexing')}`
+    : selectedSegment
+      ? `Focused on ${selectedSegment.persona_name ?? 'the selected segment'}`
+      : 'Waiting for the first discovery run'
 
   return (
     <div className="app-shell">
-      <section className="container intake-shell">
-        <section className="panel panel--priority">
-          <div className="panel__title">
-            <div>
-              <p className="eyebrow">Discovery intake</p>
-              <h2>Put the segment, sources, and launch controls first.</h2>
-              <p>
-                Define the ICP, confirm the real signal sources, and start discovery from the
-                first screen without relying on fallback defaults.
-              </p>
-            </div>
-            <div className="status-line">{isPending || isSuggesting || isDiscovering ? 'Working' : 'Idle'}</div>
-          </div>
-
-          <div className="panel__priority-grid">
-            <div>
-              <div className="field">
-                <label htmlFor="icp">ICP description</label>
-                <textarea
-                  id="icp"
-                  value={icpDescription}
-                  onChange={(event) => setIcpDescription(event.target.value)}
-                  placeholder="Describe the founders, operators, or buyers you want to understand."
-                />
-                <div className="field__help">
-                  Keep it specific enough to surface pain signals, but not so narrow that the board
-                  goes quiet.
-                </div>
-              </div>
-
-              <div className="field">
-                <label>Discovery shortlist</label>
-                <div className="chip-row">
-                  {subreddits.length ? (
-                    subreddits.map((subreddit) => (
-                      <button
-                        key={subreddit}
-                        type="button"
-                        className={`chip ${subreddits.includes(subreddit) ? 'is-selected' : ''}`}
-                        onClick={() =>
-                          startTransition(() => {
-                            setSubreddits((current) => current.filter((item) => item !== subreddit))
-                          })
-                        }
-                      >
-                        r/{subreddit}
-                      </button>
-                    ))
-                  ) : (
-                    <div className="chip-row__empty">
-                      No subreddits selected yet. Use suggestions or add them manually.
-                    </div>
-                  )}
-                </div>
-                <div className="field__help">Max five subreddits are worth keeping in the shortlist.</div>
-              </div>
-
-              <div className="field">
-                <label htmlFor="subreddit-draft">Add subreddit manually</label>
-                <div className="field__inline">
-                  <input
-                    id="subreddit-draft"
-                    value={subredditDraft}
-                    onChange={(event) => setSubredditDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault()
-                        handleAddSubreddit()
-                      }
-                    }}
-                    placeholder="e.g. SaaS or indiehackers"
-                  />
-                  <button type="button" onClick={handleAddSubreddit} disabled={!subredditDraft.trim()}>
-                    Add subreddit
-                  </button>
-                </div>
-              </div>
-
-              <div className="actions">
-                <button type="button" className="primary" onClick={handleSuggestSubreddits} disabled={isSuggesting}>
-                  {isSuggesting ? 'Suggesting…' : 'Suggest subreddits'}
-                </button>
-                <button type="button" onClick={handleResetBoard}>
-                  Reset board
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={handleDiscover}
-                  disabled={isDiscovering || subreddits.length === 0}
-                >
-                  {isDiscovering ? 'Launching…' : 'Research this segment'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBanner('Discovery only starts from the shortlist you confirm here.')}
-                  disabled={subreddits.length === 0}
-                >
-                  Explain shortlist
-                </button>
-              </div>
-            </div>
-
-            <div className="panel__priority-rail">
-              <dl className="signal-meta intake-meta">
-                <div className="signal-meta__item">
-                  <dt>Segments</dt>
-                  <dd>{metrics.active}</dd>
-                </div>
-                <div className="signal-meta__item">
-                  <dt>Ready</dt>
-                  <dd>{metrics.ready}</dd>
-                </div>
-                <div className="signal-meta__item">
-                  <dt>In flight</dt>
-                  <dd>{metrics.pending}</dd>
-                </div>
-                <div className="signal-meta__item">
-                  <dt>Shortlist</dt>
-                  <dd>{subreddits.length}</dd>
-                </div>
-              </dl>
-
-              <div className="timeline" aria-label="Discovery flow">
-                <div className="timeline__step">
-                  <span>1</span>
-                  <div>
-                    <strong>Describe the ICP</strong>
-                    <small>Start with the buying context and the pressure points.</small>
-                  </div>
-                </div>
-                <div className="timeline__step">
-                  <span>2</span>
-                  <div>
-                    <strong>Confirm the subreddits</strong>
-                    <small>The shortlist should feel plausible to someone inside the segment.</small>
-                  </div>
-                </div>
-                <div className="timeline__step">
-                  <span>3</span>
-                  <div>
-                    <strong>Research and interview</strong>
-                    <small>The board updates while the persona room stays open.</small>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      </section>
-
-      <header className="masthead container">
-        <section className="masthead__intro">
+      <header className="container shell-header">
+        <div className="shell-header__intro">
           <div>
-            <p className="eyebrow">Customer Discovery Board</p>
-            <h1>Turn ICP notes into a living interview board.</h1>
-            <p>
-              Enter a founder profile, shortlist the right subreddits, and keep the composite
-              persona ready across sessions while the pipeline runs in the background.
-            </p>
+            <p className="eyebrow">Customer Discovery Workspace</p>
+            <h1>Research, review the board, then interview the persona.</h1>
+            <p>{activeTabMeta.description}</p>
           </div>
 
           <div className="status-line" aria-live="polite">
             <span className="status-dot" />
-            {activeRunId
-              ? `Run active • ${formatStatus('indexing')}`
-              : selectedSegment
-                ? `Focused on ${selectedSegment.persona_name ?? 'the selected segment'}`
-                : 'Waiting for the first discovery run'}
+            {statusMessage}
           </div>
-        </section>
+        </div>
 
-        <aside className="masthead__signal" aria-label="Discovery pulse">
-          <div className="signal-orbit">
-            <span className="signal-orbit__core" />
-            <span className="signal-orbit__bar" />
-            <span className="signal-orbit__bar" />
-            <span className="signal-orbit__bar" />
-            <span className="signal-orbit__bar" />
-            <span className="signal-orbit__bar" />
+        <div className="shell-header__meta">
+          <div className="shell-stat">
+            <span>Segments</span>
+            <strong>{metrics.active}</strong>
           </div>
+          <div className="shell-stat">
+            <span>Ready</span>
+            <strong>{metrics.ready}</strong>
+          </div>
+          <div className="shell-stat">
+            <span>In flight</span>
+            <strong>{metrics.pending}</strong>
+          </div>
+          <div className="shell-stat">
+            <span>Shortlist</span>
+            <strong>{subreddits.length}</strong>
+          </div>
+        </div>
 
-          <dl className="signal-meta">
-            <div className="signal-meta__item">
-              <dt>Segments</dt>
-              <dd>{metrics.active}</dd>
-            </div>
-            <div className="signal-meta__item">
-              <dt>Ready</dt>
-              <dd>{metrics.ready}</dd>
-            </div>
-            <div className="signal-meta__item">
-              <dt>In flight</dt>
-              <dd>{metrics.pending}</dd>
-            </div>
-            <div className="signal-meta__item">
-              <dt>Shortlist</dt>
-              <dd>{subreddits.length}</dd>
-            </div>
-          </dl>
-        </aside>
+        <nav className="tab-nav" aria-label="Workspace tabs">
+          <div className="tab-list" role="tablist" aria-orientation="horizontal">
+            {APP_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                id={`tab-${tab.id}`}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                className={`tab-pill ${activeTab === tab.id ? 'is-active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span>{tab.label}</span>
+                <small>{tab.description}</small>
+              </button>
+            ))}
+          </div>
+        </nav>
       </header>
 
-      <main className="container workspace-grid">
-        <section className="workspace workspace--board">
-          <div className="workspace__title">
-            <p className="eyebrow">Segment board</p>
-            <h2>{boardLabel}</h2>
-            <p>
-              The board stays dense and readable. Open a segment to switch the interview room on
-              the right.
-            </p>
-          </div>
-
-          <div className="workspace__toolbar">
-            <div className="metric">
-              <dt>Selected</dt>
-              <dd>{selectedSegment?.persona_name ?? 'None'}</dd>
-            </div>
-            <div className="metric">
-              <dt>State</dt>
-              <dd>{selectedSegment ? formatStatus(selectedSegment.status) : 'Idle'}</dd>
-            </div>
-            <div className="metric">
-              <dt>Source count</dt>
-              <dd>{selectedSegment?.subreddits.length ?? 0}</dd>
-            </div>
-          </div>
-
-          <div className="segment-grid">
-            {liveSegments.length ? (
-              liveSegments.map((segment) => (
-                <SegmentCard
-                  key={segment.id}
-                  segment={segment}
-                  isSelected={segment.id === selectedSegmentId}
-                  onSelect={(next) => setSelectedSegmentId(next.id)}
-                  onChat={(next) => setSelectedSegmentId(next.id)}
-                />
-              ))
-            ) : (
-              <div className="empty-state">
-                <p className="eyebrow">Empty board</p>
-                <h3>No segments yet. Launch a discovery run to populate the board.</h3>
+      <main className="container tab-panels">
+        <section
+          id="panel-research"
+          role="tabpanel"
+          aria-labelledby="tab-research"
+          hidden={activeTab !== 'research'}
+          className="tab-panel"
+        >
+          <section className="panel panel--priority">
+            <div className="panel__title">
+              <div>
+                <p className="eyebrow">Research</p>
+                <h2>Put the segment, sources, and launch controls first.</h2>
                 <p>
-                  The board only shows real runs from this workspace.
+                  Define the ICP, confirm the real signal sources, and start discovery from the
+                  first screen without relying on fallback defaults.
                 </p>
               </div>
-            )}
-          </div>
+              <div className="status-line">{isPending || isSuggesting || isDiscovering ? 'Working' : 'Idle'}</div>
+            </div>
+
+            <div className="panel__priority-grid">
+              <div>
+                <div className="field wizard-field">
+                  <label htmlFor="wizard-customer">
+                    <span className="wizard-field__num">01</span>
+                    Who is your customer?
+                  </label>
+                  <input
+                    id="wizard-customer"
+                    className="wizard-input"
+                    value={wizardCustomer}
+                    onChange={(e) => setWizardCustomer(e.target.value)}
+                    placeholder="e.g. Bootstrapped SaaS founders"
+                  />
+                </div>
+
+                <div className="field wizard-field">
+                  <label htmlFor="wizard-problem">
+                    <span className="wizard-field__num">02</span>
+                    What problem are they trying to solve?
+                  </label>
+                  <input
+                    id="wizard-problem"
+                    className="wizard-input"
+                    value={wizardProblem}
+                    onChange={(e) => setWizardProblem(e.target.value)}
+                    placeholder="e.g. pricing confusion, churn, and feature creep"
+                  />
+                </div>
+
+                <div className="wizard-suggest-row">
+                  <button
+                    type="button"
+                    className="primary wizard-suggest-btn"
+                    onClick={handleSuggestSubreddits}
+                    disabled={isSuggesting}
+                  >
+                    {isSuggesting ? 'Finding subreddits…' : 'Suggest subreddits'}
+                  </button>
+                </div>
+
+                {isSuggesting && suggestStep > 0 && (
+                  <div className="suggest-progress">
+                    <div className="suggest-progress__bar">
+                      <div
+                        className="suggest-progress__fill"
+                        style={{ width: `${(suggestStep / SUGGEST_STEPS.length) * 100}%` }}
+                      />
+                    </div>
+                    <span className="suggest-progress__label">
+                      {SUGGEST_STEPS[suggestStep - 1]}
+                    </span>
+                  </div>
+                )}
+
+                <div className="field" style={{ marginTop: 18 }}>
+                  <label>Discovery shortlist</label>
+                  <div className="chip-row">
+                    {subreddits.length ? (
+                      subreddits.map((subreddit) => (
+                        <button
+                          key={subreddit}
+                          type="button"
+                          className={`chip ${subreddits.includes(subreddit) ? 'is-selected' : ''}`}
+                          onClick={() =>
+                            startTransition(() => {
+                              setSubreddits((current) => current.filter((item) => item !== subreddit))
+                            })
+                          }
+                        >
+                          r/{subreddit}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="chip-row__empty">
+                        No subreddits yet — click "Suggest subreddits" or add one below.
+                      </div>
+                    )}
+                  </div>
+                  <div className="field__help">Max five. Click a chip to remove it.</div>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="subreddit-draft">Add subreddit manually</label>
+                  <div className="field__inline">
+                    <input
+                      id="subreddit-draft"
+                      value={subredditDraft}
+                      onChange={(event) => setSubredditDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          handleAddSubreddit()
+                        }
+                      }}
+                      placeholder="e.g. SaaS or indiehackers"
+                    />
+                    <button type="button" onClick={handleAddSubreddit} disabled={!subredditDraft.trim()}>
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={handleDiscover}
+                    disabled={isDiscovering || subreddits.length === 0}
+                  >
+                    {isDiscovering ? 'Launching…' : 'Research this segment'}
+                  </button>
+                  <button type="button" onClick={handleResetBoard}>
+                    Reset board
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel__priority-rail">
+                <dl className="signal-meta intake-meta">
+                  <div className="signal-meta__item">
+                    <dt>Segments</dt>
+                    <dd>{metrics.active}</dd>
+                  </div>
+                  <div className="signal-meta__item">
+                    <dt>Ready</dt>
+                    <dd>{metrics.ready}</dd>
+                  </div>
+                  <div className="signal-meta__item">
+                    <dt>In flight</dt>
+                    <dd>{metrics.pending}</dd>
+                  </div>
+                  <div className="signal-meta__item">
+                    <dt>Shortlist</dt>
+                    <dd>{subreddits.length}</dd>
+                  </div>
+                </dl>
+
+                <div className="timeline" aria-label="Discovery flow">
+                  <div className="timeline__step">
+                    <span>1</span>
+                    <div>
+                      <strong>Define the segment</strong>
+                      <small>Customer and problem context.</small>
+                    </div>
+                  </div>
+                  <div className="timeline__step">
+                    <span>2</span>
+                    <div>
+                      <strong>Confirm the subreddits</strong>
+                      <small>The shortlist should feel plausible to someone inside the segment.</small>
+                    </div>
+                  </div>
+                </div>
+
+                {icpDescription && (
+                  <div className="wizard-preview">
+                    <p className="eyebrow" style={{ marginBottom: 6 }}>Query preview</p>
+                    <p className="wizard-preview__text">{icpDescription}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
         </section>
 
-        <PersonaChat key={selectedSegment?.id ?? 'empty'} segment={selectedSegment} />
+        <section
+          id="panel-board"
+          role="tabpanel"
+          aria-labelledby="tab-board"
+          hidden={activeTab !== 'board'}
+          className="tab-panel"
+        >
+          <section className="workspace workspace--board">
+            <div className="workspace__title">
+              <p className="eyebrow">Board</p>
+              <h2>{boardLabel}</h2>
+              <p>
+                The board stays dense and readable. Open a segment to switch the interview room on
+                the right.
+              </p>
+            </div>
+
+            <div className="workspace__toolbar">
+              <div className="metric">
+                <dt>Selected</dt>
+                <dd>{selectedSegment?.persona_name ?? 'None'}</dd>
+              </div>
+              <div className="metric">
+                <dt>State</dt>
+                <dd>{selectedSegment ? formatStatus(selectedSegment.status) : 'Idle'}</dd>
+              </div>
+              <div className="metric">
+                <dt>Source count</dt>
+                <dd>{selectedSegment?.subreddits.length ?? 0}</dd>
+              </div>
+            </div>
+
+            <div className="segment-grid">
+              {liveSegments.length ? (
+                liveSegments.map((segment) => (
+                  <SegmentCard
+                    key={segment.id}
+                    segment={segment}
+                    isSelected={segment.id === selectedSegmentId}
+                    onSelect={(next) => setSelectedSegmentId(next.id)}
+                    onChat={(next) => {
+                      setSelectedSegmentId(next.id)
+                      setActiveTab('interview')
+                    }}
+                  />
+                ))
+              ) : (
+                <div className="empty-state">
+                  <p className="eyebrow">Empty board</p>
+                  <h3>No segments yet. Launch a discovery run to populate the board.</h3>
+                  <p>
+                    The board only shows real runs from this workspace.
+                  </p>
+                </div>
+              )}
+            </div>
+          </section>
+        </section>
+
+        <section
+          id="panel-interview"
+          role="tabpanel"
+          aria-labelledby="tab-interview"
+          hidden={activeTab !== 'interview'}
+          className="tab-panel"
+        >
+          <PersonaChat key={selectedSegment?.id ?? 'empty'} segment={selectedSegment} />
+        </section>
       </main>
 
       {banner ? (
