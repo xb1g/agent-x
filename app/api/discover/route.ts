@@ -138,6 +138,9 @@ export async function POST(req: Request) {
   }
 }
 
+// Timeout for Xpoz operations (15 seconds per operation)
+const XPOZ_TIMEOUT_MS = 15000
+
 async function runPipeline(
   segment_id: string,
   icp_description: string,
@@ -145,7 +148,7 @@ async function runPipeline(
 ) {
   let xpozClient: XpozClient | null = null
   try {
-    xpozClient = new XpozClient({ apiKey: process.env.XPOZ_API_KEY ?? '' })
+    xpozClient = new XpozClient({ apiKey: process.env.XPOZ_API_KEY ?? '', timeoutMs: XPOZ_TIMEOUT_MS })
     await xpozClient.connect()
 
     console.log('[api/discover] pipeline_start', { segment_id, subreddits })
@@ -328,6 +331,7 @@ async function deepReadPost(
     subreddit,
     post_id: post.id,
     pain_score,
+    postTitle: post.title?.substring(0, 50),
   })
   await addLog(segment_id, `Reading post ${post.id} from r/${subreddit}`)
   const result = await getPostWithComments(post.id, xpozClient)
@@ -336,6 +340,8 @@ async function deepReadPost(
       segment_id,
       subreddit,
       post_id: post.id,
+      postTitle: post.title?.substring(0, 50),
+      reason: 'getPostWithComments returned null (check xpoz logs for timeout/error)',
     })
     return null
   }

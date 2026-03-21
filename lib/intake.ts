@@ -2,6 +2,23 @@ import { normalizeSubreddit } from './validation'
 
 export type SuggestionPayload = { subreddits?: string[] } | string[] | string
 
+export function buildQuery(
+  customer: string,
+  problem: string,
+): string {
+  const parts = [customer, problem]
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return parts.join('. ').slice(0, 500)
+}
+
+export function buildIcpDescription(customer: string, problem: string): string {
+  const c = customer.trim()
+  const p = problem.trim()
+  if (c && p) return `${c} — ${p}`
+  return c || p || ''
+}
+
 export function dedupeSubreddits(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeSubreddit).filter(Boolean))).slice(0, 5)
 }
