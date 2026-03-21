@@ -112,7 +112,13 @@ export function SegmentCard({
         <button type="button" onClick={() => onSelect?.(segment)}>
           Inspect segment
         </button>
-        <button type="button" className="primary" onClick={() => onChat?.(segment)}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => onChat?.(segment)}
+          disabled={segment.status !== 'ready'}
+          title={segment.status !== 'ready' ? 'Persona not ready yet' : undefined}
+        >
           Chat with persona
         </button>
         {segment.logs && segment.logs.length > 0 && (

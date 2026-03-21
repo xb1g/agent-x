@@ -53,22 +53,22 @@ function markdownPreview(segment: SegmentCardData | null): string {
 }
 
 function fallbackReply(question: string, segment: SegmentCardData | null): string {
-  const persona = segment?.persona_name ?? 'the persona'
   const clean = question.trim().toLowerCase()
 
   if (clean.includes('price') || clean.includes('pay')) {
-    return `${persona} will pay when the outcome is immediate and the risk of keeping the current workflow feels higher than the subscription.`
+    return `Honestly I'd need to see it solve a real problem first. I've wasted money on tools that looked good in a demo and then sat unused. What's the actual outcome I'm buying?`
   }
 
   if (clean.includes('why') || clean.includes('stuck') || clean.includes('problem')) {
-    return `${persona} is stuck between urgency and distrust. They want a simpler path, but only if it feels grounded in how they already work.`
+    return `The problem isn't that I don't know what to do — it's that every option feels like a gamble. I don't have the time to get it wrong twice.`
   }
 
   if (clean.includes('workflow') || clean.includes('process') || clean.includes('today')) {
-    return `${persona} is already improvising around a brittle process. They want fewer handoffs, fewer tabs, and a clearer decision point.`
+    return `Right now it's a mess of tabs, spreadsheets, and me remembering things in my head. It works until it doesn't. Last week it didn't.`
   }
 
-  return `${persona} hears this as a request for clarity: reduce the guesswork, show the next step, and make progress visible without adding another tool to manage.`
+  void segment
+  return `I'm not sure I'd frame it that way. What are you actually trying to figure out? Ask me something more specific.`
 }
 
 export function PersonaChat({ segment, className }: PersonaChatProps) {
@@ -123,7 +123,8 @@ export function PersonaChat({ segment, className }: PersonaChatProps) {
         },
         body: JSON.stringify({
           segment_id: segment.id,
-          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          // Skip index 0 — that's the UI-only intro message, not a real persona turn.
+          messages: nextMessages.slice(1).map(({ role, content }) => ({ role, content })),
         }),
       })
 

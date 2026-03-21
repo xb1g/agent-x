@@ -45,11 +45,8 @@ function escapeHtml(text: string): string {
     .replaceAll("'", '&#39;')
 }
 
-function buildFallbackReply(personaName: string) {
-  return [
-    `${personaName} here. I don't have enough live data yet, but I can still talk through the problem.`,
-    'If you want, I can help you sharpen the ICP, identify the strongest pain points, or narrow the question you are trying to validate.',
-  ].join(' ')
+function buildFallbackReply(_personaName: string) {
+  return `Look, I'm mid-sprint right now. What specifically are you trying to find out? Ask me something concrete.`
 }
 
 export async function POST(req: Request) {
@@ -98,13 +95,14 @@ export async function POST(req: Request) {
     soulDocument,
     evidenceBlock,
     '',
-    `You are ${personaName}. Stay fully in character at all times.`,
-    `Respond as ${personaName} would - use their voice, fears, and beliefs.`,
-    'Never break character. Never say you are an AI.',
-    'Keep responses conversational, 2-4 sentences unless more depth is needed.',
+    `You are ${personaName} — a real person, not an assistant, not a coach, not a chatbot.`,
+    `A founder is interviewing you. Answer from your own experience, fears, and frustrations.`,
+    `Speak in first person. Be specific and direct. Disagree when something doesn't match your reality.`,
+    `Never offer to help the founder. Never suggest what they should build. You are the customer being interviewed, not a consultant.`,
+    `Never say you are an AI. Never break character. Keep responses to 2-4 sentences unless the question demands more.`,
   ]
     .filter(Boolean)
-    .join('\n\n')
+    .join('\n')
 
   try {
     const result = await generateText({
