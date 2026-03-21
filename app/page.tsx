@@ -137,8 +137,19 @@ export default function Page() {
   const [suggestStep, setSuggestStep] = useState(0)
   const [subreddits, setSubreddits] = useState<string[]>([])
   const [subredditDraft, setSubredditDraft] = useState('')
-  const [segments, setSegments] = useState<SegmentCardData[]>([])
-  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
+  const [segments, setSegments] = useState<SegmentCardData[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const stored = localStorage.getItem('agentx_segments')
+      return stored ? (JSON.parse(stored) as SegmentCardData[]) : []
+    } catch {
+      return []
+    }
+  })
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return localStorage.getItem('agentx_selected_segment_id') ?? null
+  })
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isSuggesting, setIsSuggesting] = useState(false)
@@ -170,6 +181,23 @@ export default function Page() {
       setSelectedSegmentId(segments[0]?.id ?? null)
     }
   }, [segments, selectedSegmentId])
+
+  // Persist board to localStorage across sessions.
+  useEffect(() => {
+    try {
+      localStorage.setItem('agentx_segments', JSON.stringify(segments))
+    } catch {}
+  }, [segments])
+
+  useEffect(() => {
+    try {
+      if (selectedSegmentId) {
+        localStorage.setItem('agentx_selected_segment_id', selectedSegmentId)
+      } else {
+        localStorage.removeItem('agentx_selected_segment_id')
+      }
+    } catch {}
+  }, [selectedSegmentId])
 
   // Cycle through fake progress steps while suggesting.
   useEffect(() => {
@@ -440,13 +468,6 @@ export default function Page() {
     }
   }
 
-  function handleResetBoard() {
-    startTransition(() => {
-      setWizardCustomer('')
-      setWizardProblem('')
-      setBanner('Research inputs cleared.')
-    })
-  }
 
   const liveSegments = segments
   const boardLabel = liveSegments.length > 0 ? 'Live slate' : 'Empty slate'
@@ -646,8 +667,16 @@ export default function Page() {
                   >
                     {isDiscovering ? 'Launching…' : 'Research this segment'}
                   </button>
-                  <button type="button" onClick={handleResetBoard}>
-                    Reset board
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardCustomer('')
+                      setWizardProblem('')
+                      setSubredditDraft('')
+                      setSubreddits([])
+                    }}
+                  >
+                    Clear inputs
                   </button>
                 </div>
               </div>
