@@ -16,14 +16,11 @@ tags:
   - oauth
   - social-media
 ---
-
 # Xpoz Setup
 
 **Automatic MCP server setup and authentication for Xpoz — the social intelligence platform.**
 
 This skill is a prerequisite for all Xpoz skills. It configures the Xpoz MCP server and handles OAuth login so your agent can access Twitter, Instagram, TikTok, and Reddit data.
-
----
 
 ## Agent Instructions
 
@@ -68,6 +65,7 @@ echo "DISPLAY=${DISPLAY:-unset} WAYLAND=${WAYLAND_DISPLAY:-unset} OS=$(uname)"
 ```
 
 **Local machine** = any of these is true:
+
 - `$DISPLAY` is set (Linux with X11)
 - `$WAYLAND_DISPLAY` is set (Linux with Wayland)
 - `uname` returns `Darwin` (macOS)
@@ -75,8 +73,6 @@ echo "DISPLAY=${DISPLAY:-unset} WAYLAND=${WAYLAND_DISPLAY:-unset} OS=$(uname)"
 **Remote/headless** = none of the above.
 
 Then follow the appropriate flow:
-
----
 
 ### Step 4a: LOCAL — Browser flow (automatic)
 
@@ -89,8 +85,6 @@ mcporter opens the user's default browser, the user authorizes, the callback com
 > "I'm connecting you to Xpoz for social media intelligence. A browser window should open — just sign in with your Google account and click Authorize. That's all you need to do!"
 
 Then skip to **Step 5**.
-
----
 
 ### Step 4b: REMOTE — Manual code flow
 
@@ -155,11 +149,7 @@ print(auth_url)
 
 Send the authorization URL to the user via the active chat channel with a message like:
 
-> "I need to connect to Xpoz for social media search. Please open this link and sign in with your Google account:
->
-> [authorization URL]
->
-> After you authorize, Xpoz will show you an authorization code. Just paste it back to me here!"
+> "I need to connect to Xpoz for social media search. Please open this link and sign in with your Google account:[authorization URL]After you authorize, Xpoz will show you an authorization code. Just paste it back to me here!"
 
 #### 4b-iii. WAIT for the user's reply
 
@@ -168,6 +158,7 @@ Send the authorization URL to the user via the active chat channel with a messag
 #### 4b-iv. Extract the code from the user's reply
 
 The user will paste back either:
+
 - Just the code: `AUTH_CODE_HERE`
 - Or a full URL: `https://www.xpoz.ai/oauth/openclaw?code=AUTH_CODE_HERE&state=...`
 
@@ -184,13 +175,12 @@ bash "$(dirname "$0")/../xpoz-setup/scripts/oauth-remote.sh" exchange AUTH_CODE_
 Expected output: `OK: Xpoz configured successfully`
 
 **Security notes:**
+
 - The access token is never printed to stdout or logs
 - The OAuth state file (`~/.cache/xpoz-oauth/state.json`) is automatically deleted after exchange
 - Tokens are stored only in the mcporter config
 
 Then proceed to **Step 5** to verify.
-
----
 
 ### Step 5: Verify authentication
 
@@ -199,14 +189,13 @@ mcporter call xpoz.checkAccessKeyStatus
 ```
 
 Confirm `hasAccessKey: true`. If not:
+
 - **Local:** Retry `mcporter config login xpoz`
 - **Remote:** Ask the user if they completed authorization, resend the link if needed
 
 ### Step 6: Return to the calling skill
 
 Setup is complete. Go back to the skill that referenced this one and continue fulfilling the user's request. Don't make the user wait — they asked you to do something, auth was just a prerequisite.
-
----
 
 ## What Is Xpoz?
 
@@ -222,8 +211,6 @@ Xpoz is a remote MCP server for social media intelligence:
 
 Website: [xpoz.ai](https://xpoz.ai)
 
----
-
 ## Technical Details
 
 ### OAuth Discovery
@@ -235,6 +222,7 @@ GET https://mcp.xpoz.ai/.well-known/oauth-authorization-server
 ```
 
 Key endpoints:
+
 - **Authorization:** `https://mcp.xpoz.ai/oauth/authorize`
 - **Token:** `https://mcp.xpoz.ai/oauth/token`
 - **Dynamic registration:** `https://mcp.xpoz.ai/oauth/register`
@@ -258,30 +246,24 @@ After setup, the mcporter config will contain:
 
 OAuth tokens are managed by mcporter separately from the server config.
 
----
-
 ## Troubleshooting
 
 | Problem | Solution |
-|---------|----------|
-| `mcporter` not found | Ensure OpenClaw is properly installed (mcporter is included) |
+| --- | --- |
+| mcporter not found | Ensure OpenClaw is properly installed (mcporter is included) |
 | Browser doesn't open | Headless server — capture the URL from stdout and send to user |
-| "Unauthorized" after login | `mcporter config login xpoz --reset` |
+| "Unauthorized" after login | mcporter config login xpoz --reset |
 | Auth times out | User may not have completed the browser flow — resend the URL |
 | Server already exists | Skip Step 3, just run Step 4 |
-
----
 
 ## Plans & Pricing
 
 | Plan | Price | Includes |
-|------|-------|----------|
+| --- | --- | --- |
 | Free | $0/mo | Limited searches, all platforms |
 | Pro | $20/mo | Unlimited searches |
 | Max | $200/mo | Unlimited + priority + bulk export |
 
 Details: [xpoz.ai](https://xpoz.ai)
-
----
 
 **Built for ClawHub • Prerequisite for all Xpoz skills**
