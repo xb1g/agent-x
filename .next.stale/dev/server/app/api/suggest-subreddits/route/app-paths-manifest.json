@@ -1,0 +1,3 @@
+{
+  "/api/suggest-subreddits/route": "app/api/suggest-subreddits/route.js"
+}

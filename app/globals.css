@@ -97,6 +97,10 @@ a {
   padding: 20px 0 28px;
 }
 
+.intake-shell {
+  margin-bottom: 20px;
+}
+
 .masthead {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 420px);
@@ -279,9 +283,9 @@ a {
   font-weight: 650;
 }
 
-.page-grid {
+.workspace-grid {
   display: grid;
-  grid-template-columns: minmax(290px, 360px) minmax(0, 1.2fr) minmax(320px, 430px);
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 430px);
   gap: 20px;
   align-items: start;
 }
@@ -291,6 +295,27 @@ a {
   padding: 22px;
   position: sticky;
   top: 18px;
+}
+
+.panel--priority {
+  position: static;
+  padding: 28px;
+}
+
+.panel__priority-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.panel__priority-rail {
+  display: grid;
+  gap: 16px;
+}
+
+.intake-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .panel__title {
@@ -374,6 +399,29 @@ a {
   box-shadow: 0 0 0 4px rgba(45, 111, 99, 0.12);
 }
 
+.field__inline {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.field__inline input {
+  flex: 1;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 21, 17, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  outline: none;
+}
+
+.field__inline input:focus {
+  border-color: rgba(45, 111, 99, 0.5);
+  box-shadow: 0 0 0 4px rgba(45, 111, 99, 0.12);
+}
+
 .field__help {
   font-size: 0.85rem;
   color: var(--muted);
@@ -405,6 +453,15 @@ a {
   background: rgba(45, 111, 99, 0.14);
   border-color: rgba(45, 111, 99, 0.34);
   color: var(--accent-strong);
+}
+
+.chip-row__empty {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px dashed rgba(23, 21, 17, 0.18);
+  background: rgba(255, 255, 255, 0.48);
+  color: var(--muted);
 }
 
 .actions {
@@ -492,6 +549,10 @@ a {
 .workspace {
   display: grid;
   gap: 18px;
+}
+
+.workspace--board {
+  min-width: 0;
 }
 
 .workspace__title {
@@ -918,7 +979,8 @@ a {
 
 @media (max-width: 1280px) {
   .masthead,
-  .page-grid {
+  .workspace-grid,
+  .panel__priority-grid {
     grid-template-columns: 1fr;
   }
 
@@ -970,6 +1032,10 @@ a {
 
   .actions {
     grid-template-columns: 1fr;
+  }
+
+  .field__inline {
+    flex-direction: column;
   }
 
   .signal-meta {

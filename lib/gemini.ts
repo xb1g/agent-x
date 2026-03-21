@@ -1,10 +1,12 @@
 import { google } from '@ai-sdk/google'
 import { embed as embedValue, embedMany, generateText } from 'ai'
 import { escape } from 'html-escaper'
+import { extractSuggestedSubreddits } from './intake'
 
 const FLASH_MODEL = 'gemini-3.1-flash-lite-preview'
 const PRO_MODEL = 'gemini-3.1-pro-preview'
-const EMBEDDING_MODEL = 'text-embedding-004'
+const EMBEDDING_MODEL = 'gemini-embedding-2-preview'
+const DEFAULT_SUBREDDITS = ['SaaS', 'indiehackers', 'startups']
 
 export type PersonaFragment = {
   stated_problem: string
@@ -37,10 +39,17 @@ export function parsePersonaFragment(raw: string): PersonaFragment | null {
   }
 }
 
+const EMBEDDING_DIMENSIONS = 1536
+
 export async function embed(text: string): Promise<number[]> {
   const { embedding } = await embedValue({
-    model: google.textEmbeddingModel(EMBEDDING_MODEL),
+    model: google.embedding(EMBEDDING_MODEL),
     value: text,
+    providerOptions: {
+      google: {
+        outputDimensionality: EMBEDDING_DIMENSIONS,
+      },
+    },
   })
 
   return embedding
@@ -48,8 +57,13 @@ export async function embed(text: string): Promise<number[]> {
 
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   const { embeddings } = await embedMany({
-    model: google.textEmbeddingModel(EMBEDDING_MODEL),
+    model: google.embedding(EMBEDDING_MODEL),
     values: texts,
+    providerOptions: {
+      google: {
+        outputDimensionality: EMBEDDING_DIMENSIONS,
+      },
+    },
   })
 
   return embeddings
@@ -152,24 +166,17 @@ export async function suggestSubreddits(
 Return a JSON array of 3-5 subreddit names without the r/ prefix. Output only the JSON array.`,
     })
 
-    const parsed = JSON.parse(stripCodeFences(text)) as unknown
-    if (!Array.isArray(parsed)) {
-      return defaultSubreddits()
-    }
-
-    return parsed
-      .filter((value): value is string => typeof value === 'string')
-      .slice(0, 5)
-      .map((value) => value.replace(/^r\//i, ''))
+    return normalizeSuggestedSubreddits(text)
   } catch {
-    return defaultSubreddits()
+    return DEFAULT_SUBREDDITS
   }
+}
+
+export function normalizeSuggestedSubreddits(raw: string): string[] {
+  const suggestions = extractSuggestedSubreddits(stripCodeFences(raw))
+  return suggestions.length > 0 ? suggestions : DEFAULT_SUBREDDITS
 }
 
 function stripCodeFences(text: string): string {
   return text.replace(/```json\s*|\s*```/g, '').trim()
-}
-
-function defaultSubreddits(): string[] {
-  return ['SaaS', 'indiehackers', 'startups']
 }

@@ -1,0 +1,13 @@
+var R=require("../../../chunks/[turbopack]_runtime.js")("server/app/api/suggest-subreddits/route.js")
+R.c("server/chunks/ac46c_@vercel_oidc_dist_d85b682c._.js")
+R.c("server/chunks/b888e_next_3d43acaf._.js")
+R.c("server/chunks/4b6e4_@opentelemetry_api_build_esm_9cee443b._.js")
+R.c("server/chunks/a8d7e_zod_v4_c49d0d28._.js")
+R.c("server/chunks/a8d7e_zod_v3_4da438b0._.js")
+R.c("server/chunks/c5798_@ai-sdk_google_dist_index_mjs_3b83f4bd._.js")
+R.c("server/chunks/fb1ea_ai_dist_index_mjs_fb7d5b0b._.js")
+R.c("server/chunks/node_modules__pnpm_a1acbff4._.js")
+R.c("server/chunks/[root-of-the-server]__4198d5f5._.js")
+R.c("server/chunks/_next-internal_server_app_api_suggest-subreddits_route_actions_2c67a95f.js")
+R.m("[project]/node_modules/.pnpm/next@16.0.10_@opentelemetry+api@1.9.0_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/next/dist/esm/build/templates/app-route.js { INNER_APP_ROUTE => \"[project]/app/api/suggest-subreddits/route.ts [app-route] (ecmascript)\" } [app-route] (ecmascript)")
+module.exports=R.m("[project]/node_modules/.pnpm/next@16.0.10_@opentelemetry+api@1.9.0_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/next/dist/esm/build/templates/app-route.js { INNER_APP_ROUTE => \"[project]/app/api/suggest-subreddits/route.ts [app-route] (ecmascript)\" } [app-route] (ecmascript)").exports

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "xpoz": {
+      "baseUrl": "https://mcp.xpoz.ai/mcp",
+      "auth": "oauth"
+    }
+  },
+  "imports": []
+}

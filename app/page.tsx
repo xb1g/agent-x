@@ -8,6 +8,11 @@ import {
   type SegmentCardData,
   type SegmentStatus,
 } from './components/SegmentCard'
+import {
+  dedupeSubreddits,
+  extractSuggestedSubreddits,
+} from '../lib/intake'
+import { normalizeSubreddit } from '../lib/validation'
 
 type SuggestionResponse = {
   subreddits?: string[]
@@ -20,113 +25,41 @@ type DiscoverResponse = {
 
 type SegmentResponse = SegmentCardData & {
   segment_size?: SegmentCardData['segment_size']
+  soul_document?: string | null
 }
-
-const DEMO_SEGMENTS: SegmentCardData[] = [
-  {
-    id: 'demo-bootstrapped-saas',
-    icp_description:
-      'Bootstrapped SaaS founders who feel pricing, churn, and feature creep colliding at the same time.',
-    subreddits: ['SaaS', 'indiehackers', 'startups'],
-    status: 'ready',
-    status_message: null,
-    persona_name: 'Maya',
-    segment_size: {
-      posts_indexed: 42,
-      fragments_collected: 16,
-      subreddits: ['SaaS', 'indiehackers', 'startups'],
-      label: 'Signal dense',
-    },
-    pain_signals: ['Pricing anxiety', 'Churn loops', 'Founder overload'],
-    updated_at: new Date(Date.now() - 1000 * 60 * 42).toISOString(),
-  },
-  {
-    id: 'demo-ai-agency',
-    icp_description:
-      'AI agency operators trying to keep clients happy while every workflow still changes every week.',
-    subreddits: ['agency', 'Entrepreneur', 'smallbusiness'],
-    status: 'reading',
-    status_message: 'Deep reader agents are collecting the strongest complaint threads.',
-    persona_name: 'Noah',
-    segment_size: {
-      posts_indexed: 28,
-      fragments_collected: 9,
-      subreddits: ['agency', 'Entrepreneur', 'smallbusiness'],
-      label: 'Reading queue',
-    },
-    pain_signals: ['Scope drift', 'Tool fatigue', 'Retainer pressure'],
-    updated_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-  },
-  {
-    id: 'demo-marketplace',
-    icp_description:
-      'Solo operators selling digital products who need more buyers without adding another channel to manage.',
-    subreddits: ['buildinpublic', 'marketing', 'freelance'],
-    status: 'synthesizing',
-    status_message: 'A synthesis pass is condensing fragments into a usable voice.',
-    persona_name: 'Ari',
-    segment_size: {
-      posts_indexed: 67,
-      fragments_collected: 24,
-      subreddits: ['buildinpublic', 'marketing', 'freelance'],
-      label: 'Almost ready',
-    },
-    pain_signals: ['Lumpy demand', 'Launch anxiety', 'Lead scarcity'],
-    updated_at: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
-  },
-]
-
-const EMPTY_SUBREDDITS = ['SaaS', 'indiehackers', 'startups']
 
 function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function normalizeSubreddit(value: string): string {
-  return value.trim().replace(/^r\//i, '').replace(/^\/+/, '')
-}
+function extractPainSignals(soulDocument: string | null | undefined): string[] {
+  if (!soulDocument) return []
 
-function dedupe(values: string[]): string[] {
-  return Array.from(new Set(values.map(normalizeSubreddit).filter(Boolean))).slice(0, 5)
-}
+  const lines = soulDocument.split('\n')
+  const painSignals: string[] = []
+  let inPainPoints = false
 
-function fallbackSubreddits(icp: string): string[] {
-  const value = icp.toLowerCase()
-  const pool = new Set<string>()
-
-  if (value.includes('saas') || value.includes('founder') || value.includes('pricing')) {
-    pool.add('SaaS')
-    pool.add('indiehackers')
-    pool.add('startups')
-  }
-
-  if (value.includes('agency') || value.includes('client') || value.includes('marketing')) {
-    pool.add('agency')
-    pool.add('marketing')
-    pool.add('Entrepreneur')
-  }
-
-  if (value.includes('solo') || value.includes('indie') || value.includes('freelance')) {
-    pool.add('freelance')
-    pool.add('buildinpublic')
-    pool.add('smallbusiness')
-  }
-
-  if (value.includes('ai') || value.includes('automation') || value.includes('workflow')) {
-    pool.add('ArtificialIntelligence')
-    pool.add('ChatGPT')
-    pool.add('automation')
-  }
-
-  while (pool.size < 5) {
-    for (const subreddit of EMPTY_SUBREDDITS) {
-      pool.add(subreddit)
-      if (pool.size >= 5) break
+  for (const line of lines) {
+    if (line.startsWith('## Pain Points')) {
+      inPainPoints = true
+      continue
     }
-    if (pool.size >= 5) break
+
+    if (inPainPoints && line.startsWith('## ')) {
+      break
+    }
+
+    if (inPainPoints && /^\d+\./.test(line.trim())) {
+      painSignals.push(
+        line
+          .replace(/^\d+\.\s*/, '')
+          .split('—')[0]
+          .trim()
+      )
+    }
   }
 
-  return Array.from(pool).slice(0, 5)
+  return painSignals.slice(0, 3)
 }
 
 function formatStatus(status: SegmentStatus): string {
@@ -144,27 +77,6 @@ function formatStatus(status: SegmentStatus): string {
   }
 }
 
-function parseSubreddits(text: string): string[] {
-  const trimmed = text.trim()
-  if (!trimmed) return []
-
-  try {
-    const parsed = JSON.parse(trimmed)
-    if (Array.isArray(parsed)) {
-      return dedupe(parsed.map((item) => String(item)))
-    }
-  } catch {
-    // fall through to heuristics
-  }
-
-  return dedupe(
-    trimmed
-      .split(/[\n,]/g)
-      .map((item) => item.trim())
-      .filter(Boolean),
-  )
-}
-
 function upsertSegment(list: SegmentCardData[], next: SegmentCardData): SegmentCardData[] {
   const index = list.findIndex((segment) => segment.id === next.id)
 
@@ -177,13 +89,18 @@ function upsertSegment(list: SegmentCardData[], next: SegmentCardData): SegmentC
   return copy
 }
 
+function logClient(event: string, details?: Record<string, unknown>) {
+  console.log(`[discovery-intake] ${event}`, details ?? {})
+}
+
 export default function Page() {
   const [icpDescription, setIcpDescription] = useState(
     'Bootstrapped SaaS founders who are frustrated with pricing, churn, and feature creep.',
   )
-  const [subreddits, setSubreddits] = useState<string[]>(['SaaS', 'indiehackers', 'startups'])
-  const [segments, setSegments] = useState<SegmentCardData[]>(DEMO_SEGMENTS)
-  const [selectedSegmentId, setSelectedSegmentId] = useState(DEMO_SEGMENTS[0]?.id ?? null)
+  const [subreddits, setSubreddits] = useState<string[]>([])
+  const [subredditDraft, setSubredditDraft] = useState('')
+  const [segments, setSegments] = useState<SegmentCardData[]>([])
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isSuggesting, setIsSuggesting] = useState(false)
@@ -219,10 +136,22 @@ export default function Page() {
 
     const poll = async () => {
       try {
+        logClient('segment_poll_start', { activeRunId })
         const response = await fetch(`/api/segment/${activeRunId}`)
+        logClient('segment_poll_response', {
+          activeRunId,
+          ok: response.ok,
+          status: response.status,
+        })
         if (!response.ok) return
 
         const data = (await response.json()) as Partial<SegmentResponse>
+        logClient('segment_poll_payload', {
+          id: data.id,
+          status: data.status,
+          persona_name: data.persona_name,
+          status_message: data.status_message,
+        })
         if (cancelled) return
 
         const nextSegment: SegmentCardData = {
@@ -234,7 +163,11 @@ export default function Page() {
           persona_name: data.persona_name ?? null,
           segment_size: data.segment_size ?? null,
           pain_signals:
-            data.pain_signals ?? ['Waiting for the first high-signal posts to surface.'],
+            data.pain_signals?.length
+              ? data.pain_signals
+              : extractPainSignals(data.soul_document).length
+                ? extractPainSignals(data.soul_document)
+                : ['Waiting for the first high-signal posts to surface.'],
           updated_at: new Date().toISOString(),
         }
 
@@ -250,6 +183,7 @@ export default function Page() {
           }
         })
       } catch {
+        logClient('segment_poll_failed', { activeRunId })
         // Keep polling until the run resolves or the component unmounts.
       }
     }
@@ -265,18 +199,55 @@ export default function Page() {
     }
   }, [activeRunId, icpDescription, startTransition, subreddits])
 
+  function handleAddSubreddit() {
+    const normalized = normalizeSubreddit(subredditDraft).replace(/^\/+/, '')
+    logClient('manual_add_attempt', {
+      draft: subredditDraft,
+      normalized,
+      currentShortlist: subreddits,
+    })
+    if (!normalized) return
+
+    if (subreddits.includes(normalized)) {
+      setBanner(`r/${normalized} is already in the shortlist.`)
+      setSubredditDraft('')
+      return
+    }
+
+    if (subreddits.length >= 5) {
+      setBanner('The shortlist is capped at five subreddits.')
+      return
+    }
+
+    startTransition(() => {
+      setSubreddits((current) => dedupeSubreddits([...current, normalized]))
+    })
+    setSubredditDraft('')
+    setBanner(`Added r/${normalized} to the shortlist.`)
+    logClient('manual_add_success', { added: normalized })
+  }
+
   async function handleSuggestSubreddits() {
     const trimmed = icpDescription.trim()
     if (!trimmed) return
 
+    logClient('suggest_start', {
+      icpLength: trimmed.length,
+      currentShortlist: subreddits,
+    })
     setIsSuggesting(true)
     setBanner(null)
 
-  try {
+    try {
       const response = await fetch('/api/suggest-subreddits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ icp_description: trimmed }),
+      })
+      logClient('suggest_response', {
+        ok: response.ok,
+        status: response.status,
+        contentType: response.headers.get('content-type'),
       })
 
       if (!response.ok) {
@@ -288,22 +259,24 @@ export default function Page() {
         ? ((await response.json()) as SuggestionResponse | string[])
         : await response.text()
 
-      const next = Array.isArray(payload)
-        ? payload
-        : typeof payload === 'string'
-          ? parseSubreddits(payload)
-          : Array.isArray(payload.subreddits)
-            ? payload.subreddits
-            : []
+      const next = extractSuggestedSubreddits(payload)
+      logClient('suggest_payload_parsed', {
+        next,
+        rawPayloadType: Array.isArray(payload) ? 'array' : typeof payload,
+      })
+      if (!next.length) {
+        setBanner('No subreddit suggestions came back. Add one manually to continue.')
+        logClient('suggest_empty')
+        return
+      }
 
       startTransition(() => {
-        setSubreddits(next.length ? dedupe(next) : fallbackSubreddits(trimmed))
+        setSubreddits(next)
       })
+      setBanner(`Shortlisted ${next.length} subreddit${next.length === 1 ? '' : 's'}.`)
     } catch {
-      startTransition(() => {
-        setSubreddits(fallbackSubreddits(trimmed))
-      })
-      setBanner('Model suggestions were unavailable, so local heuristics filled the shortlist.')
+      logClient('suggest_failed')
+      setBanner('Suggestions were unavailable. Add one or more subreddits manually to continue.')
     } finally {
       setIsSuggesting(false)
     }
@@ -313,7 +286,16 @@ export default function Page() {
     const trimmed = icpDescription.trim()
     if (!trimmed) return
 
-    const shortlist = subreddits.length ? subreddits : fallbackSubreddits(trimmed)
+    const shortlist = dedupeSubreddits(subreddits)
+    logClient('discover_attempt', {
+      icpLength: trimmed.length,
+      shortlist,
+    })
+    if (!shortlist.length) {
+      setBanner('Add at least one subreddit before starting discovery.')
+      logClient('discover_blocked_no_shortlist')
+      return
+    }
 
     setIsDiscovering(true)
     setBanner(null)
@@ -349,12 +331,17 @@ export default function Page() {
           subreddits: shortlist,
         }),
       })
+      logClient('discover_response', {
+        ok: response.ok,
+        status: response.status,
+      })
 
       if (!response.ok) {
         throw new Error('discover failed')
       }
 
       const payload = (await response.json()) as DiscoverResponse
+      logClient('discover_payload', payload as Record<string, unknown>)
       const runId = payload.segment_id ?? tempSegment.id
 
       setActiveRunId(runId)
@@ -372,6 +359,7 @@ export default function Page() {
 
       setBanner('Discovery started. The board will update as segments resolve.')
     } catch {
+      logClient('discover_failed')
       setBanner('Discovery could not reach the backend, but the intake panel still works locally.')
       setActiveRunId(null)
       startTransition(() => {
@@ -391,21 +379,171 @@ export default function Page() {
 
   function handleResetBoard() {
     startTransition(() => {
-      setSegments(DEMO_SEGMENTS)
-      setSelectedSegmentId(DEMO_SEGMENTS[0]?.id ?? null)
-      setSubreddits(['SaaS', 'indiehackers', 'startups'])
+      setSegments([])
+      setSelectedSegmentId(null)
+      setSubreddits([])
+      setSubredditDraft('')
       setActiveRunId(null)
-      setBanner('Board reset to the starter slate.')
+      setBanner('Board cleared.')
     })
   }
 
   const liveSegments = segments
-  const boardLabel = liveSegments.some((segment) => !segment.id.startsWith('demo-'))
-    ? 'Live slate'
-    : 'Starter slate'
+  const boardLabel = liveSegments.length > 0 ? 'Live slate' : 'Empty slate'
 
   return (
     <div className="app-shell">
+      <section className="container intake-shell">
+        <section className="panel panel--priority">
+          <div className="panel__title">
+            <div>
+              <p className="eyebrow">Discovery intake</p>
+              <h2>Put the segment, sources, and launch controls first.</h2>
+              <p>
+                Define the ICP, confirm the real signal sources, and start discovery from the
+                first screen without relying on fallback defaults.
+              </p>
+            </div>
+            <div className="status-line">{isPending || isSuggesting || isDiscovering ? 'Working' : 'Idle'}</div>
+          </div>
+
+          <div className="panel__priority-grid">
+            <div>
+              <div className="field">
+                <label htmlFor="icp">ICP description</label>
+                <textarea
+                  id="icp"
+                  value={icpDescription}
+                  onChange={(event) => setIcpDescription(event.target.value)}
+                  placeholder="Describe the founders, operators, or buyers you want to understand."
+                />
+                <div className="field__help">
+                  Keep it specific enough to surface pain signals, but not so narrow that the board
+                  goes quiet.
+                </div>
+              </div>
+
+              <div className="field">
+                <label>Discovery shortlist</label>
+                <div className="chip-row">
+                  {subreddits.length ? (
+                    subreddits.map((subreddit) => (
+                      <button
+                        key={subreddit}
+                        type="button"
+                        className={`chip ${subreddits.includes(subreddit) ? 'is-selected' : ''}`}
+                        onClick={() =>
+                          startTransition(() => {
+                            setSubreddits((current) => current.filter((item) => item !== subreddit))
+                          })
+                        }
+                      >
+                        r/{subreddit}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="chip-row__empty">
+                      No subreddits selected yet. Use suggestions or add them manually.
+                    </div>
+                  )}
+                </div>
+                <div className="field__help">Max five subreddits are worth keeping in the shortlist.</div>
+              </div>
+
+              <div className="field">
+                <label htmlFor="subreddit-draft">Add subreddit manually</label>
+                <div className="field__inline">
+                  <input
+                    id="subreddit-draft"
+                    value={subredditDraft}
+                    onChange={(event) => setSubredditDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        handleAddSubreddit()
+                      }
+                    }}
+                    placeholder="e.g. SaaS or indiehackers"
+                  />
+                  <button type="button" onClick={handleAddSubreddit} disabled={!subredditDraft.trim()}>
+                    Add subreddit
+                  </button>
+                </div>
+              </div>
+
+              <div className="actions">
+                <button type="button" className="primary" onClick={handleSuggestSubreddits} disabled={isSuggesting}>
+                  {isSuggesting ? 'Suggesting…' : 'Suggest subreddits'}
+                </button>
+                <button type="button" onClick={handleResetBoard}>
+                  Reset board
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleDiscover}
+                  disabled={isDiscovering || subreddits.length === 0}
+                >
+                  {isDiscovering ? 'Launching…' : 'Research this segment'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBanner('Discovery only starts from the shortlist you confirm here.')}
+                  disabled={subreddits.length === 0}
+                >
+                  Explain shortlist
+                </button>
+              </div>
+            </div>
+
+            <div className="panel__priority-rail">
+              <dl className="signal-meta intake-meta">
+                <div className="signal-meta__item">
+                  <dt>Segments</dt>
+                  <dd>{metrics.active}</dd>
+                </div>
+                <div className="signal-meta__item">
+                  <dt>Ready</dt>
+                  <dd>{metrics.ready}</dd>
+                </div>
+                <div className="signal-meta__item">
+                  <dt>In flight</dt>
+                  <dd>{metrics.pending}</dd>
+                </div>
+                <div className="signal-meta__item">
+                  <dt>Shortlist</dt>
+                  <dd>{subreddits.length}</dd>
+                </div>
+              </dl>
+
+              <div className="timeline" aria-label="Discovery flow">
+                <div className="timeline__step">
+                  <span>1</span>
+                  <div>
+                    <strong>Describe the ICP</strong>
+                    <small>Start with the buying context and the pressure points.</small>
+                  </div>
+                </div>
+                <div className="timeline__step">
+                  <span>2</span>
+                  <div>
+                    <strong>Confirm the subreddits</strong>
+                    <small>The shortlist should feel plausible to someone inside the segment.</small>
+                  </div>
+                </div>
+                <div className="timeline__step">
+                  <span>3</span>
+                  <div>
+                    <strong>Research and interview</strong>
+                    <small>The board updates while the persona room stays open.</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
       <header className="masthead container">
         <section className="masthead__intro">
           <div>
@@ -458,99 +596,8 @@ export default function Page() {
         </aside>
       </header>
 
-      <main className="container page-grid">
-        <section className="panel">
-          <div className="panel__title">
-            <div>
-              <p className="eyebrow">Discovery intake</p>
-              <h2>Describe the segment and choose the signal sources.</h2>
-              <p>Start broad, then let the suggestions narrow the board before you launch.</p>
-            </div>
-            <div className="status-line">{isPending || isSuggesting || isDiscovering ? 'Working' : 'Idle'}</div>
-          </div>
-
-          <div className="field">
-            <label htmlFor="icp">ICP description</label>
-            <textarea
-              id="icp"
-              value={icpDescription}
-              onChange={(event) => setIcpDescription(event.target.value)}
-              placeholder="Describe the founders, operators, or buyers you want to understand."
-            />
-            <div className="field__help">
-              Keep it specific enough to surface pain signals, but not so narrow that the board
-              goes quiet.
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Suggested subreddits</label>
-        <div className="chip-row">
-              {subreddits.map((subreddit) => (
-                <button
-                  key={subreddit}
-                  type="button"
-                  className={`chip ${subreddits.includes(subreddit) ? 'is-selected' : ''}`}
-                  onClick={() =>
-                    startTransition(() => {
-                      setSubreddits((current) =>
-                        current.includes(subreddit)
-                          ? current.filter((item) => item !== subreddit)
-                          : current.length >= 5
-                            ? current
-                            : [...current, subreddit],
-                      )
-                    })
-                  }
-                >
-                  r/{subreddit}
-                </button>
-              ))}
-            </div>
-            <div className="field__help">Max five subreddits are worth keeping in the shortlist.</div>
-          </div>
-
-          <div className="actions">
-            <button type="button" className="primary" onClick={handleSuggestSubreddits} disabled={isSuggesting}>
-              {isSuggesting ? 'Suggesting…' : 'Suggest subreddits'}
-            </button>
-            <button type="button" onClick={handleResetBoard}>
-              Reset board
-            </button>
-            <button type="button" className="primary" onClick={handleDiscover} disabled={isDiscovering}>
-              {isDiscovering ? 'Launching…' : 'Research this segment'}
-            </button>
-            <button type="button" onClick={() => setBanner('Selected subreddits stay pinned until you change them.')}>
-              Explain shortlist
-            </button>
-          </div>
-
-          <div className="timeline" aria-label="Discovery flow">
-            <div className="timeline__step">
-              <span>1</span>
-              <div>
-                <strong>Describe the ICP</strong>
-                <small>Start with the buying context and the pressure points.</small>
-              </div>
-            </div>
-            <div className="timeline__step">
-              <span>2</span>
-              <div>
-                <strong>Confirm the subreddits</strong>
-                <small>The shortlist should feel plausible to someone inside the segment.</small>
-              </div>
-            </div>
-            <div className="timeline__step">
-              <span>3</span>
-              <div>
-                <strong>Research and interview</strong>
-                <small>The board updates while the persona room stays open.</small>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="workspace">
+      <main className="container workspace-grid">
+        <section className="workspace workspace--board">
           <div className="workspace__title">
             <p className="eyebrow">Segment board</p>
             <h2>{boardLabel}</h2>
@@ -589,9 +636,9 @@ export default function Page() {
             ) : (
               <div className="empty-state">
                 <p className="eyebrow">Empty board</p>
-                <h3>No segments yet. Use the intake panel to launch the first run.</h3>
+                <h3>No segments yet. Launch a discovery run to populate the board.</h3>
                 <p>
-                  The starter slate will appear here until the API returns live segment data.
+                  The board only shows real runs from this workspace.
                 </p>
               </div>
             )}

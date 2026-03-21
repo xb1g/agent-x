@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parsePersonaFragment } from './gemini'
+import { normalizeSuggestedSubreddits, parsePersonaFragment } from './gemini'
 
 test('parsePersonaFragment parses valid JSON', () => {
   const raw = JSON.stringify({
@@ -23,4 +23,16 @@ test('parsePersonaFragment returns null for malformed JSON', () => {
 
 test('parsePersonaFragment returns null when required fields are missing', () => {
   assert.equal(parsePersonaFragment(JSON.stringify({ foo: 'bar' })), null)
+})
+
+test('normalizeSuggestedSubreddits falls back when model output is empty', () => {
+  assert.deepEqual(normalizeSuggestedSubreddits('[]'), ['SaaS', 'indiehackers', 'startups'])
+  assert.deepEqual(normalizeSuggestedSubreddits(''), ['SaaS', 'indiehackers', 'startups'])
+})
+
+test('normalizeSuggestedSubreddits normalizes valid model output', () => {
+  assert.deepEqual(
+    normalizeSuggestedSubreddits('["r/ApplyingToCollege", "studyAbroad", "IntltoUSA"]'),
+    ['ApplyingToCollege', 'studyAbroad', 'IntltoUSA'],
+  )
 })
