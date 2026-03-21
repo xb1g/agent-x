@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { SuggestSubredditsSchema } from '../../../lib/validation'
-import { suggestSubreddits } from '../../../lib/gemini'
+import { suggestSubreddits } from '../../../lib/xpoz'
 
 const DEFAULT_SUBREDDITS = ['SaaS', 'indiehackers', 'startups']
 

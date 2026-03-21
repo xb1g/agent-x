@@ -74,7 +74,7 @@ export async function searchSubredditPosts(
     return await withClient(async (c) => {
       const results = await c.reddit.searchPosts(
         `${query} struggling frustrated help`,
-        { subreddit: normalized, limit, sort: 'new' }
+        { subreddit: normalized, sort: 'new' }
       )
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (results.data as any[]).map((p) => ({
@@ -136,7 +136,7 @@ export async function suggestSubreddits(
 ): Promise<string[]> {
   return withClient(async (c) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const results = await c.reddit.getSubredditsByKeywords(query, { limit: 10 }) as any
+    const results = await c.reddit.getSubredditsByKeywords(query) as any
     return (results.data as Array<{ displayName?: unknown }>)
       .map((s) => String(s.displayName ?? ''))
       .filter(Boolean)

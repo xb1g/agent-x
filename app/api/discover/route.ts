@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { waitUntil } from '@vercel/functions'
+import { XpozClient } from '@xpoz/xpoz'
 import { DiscoverSchema } from '../../../lib/validation'
-import { fetchListing, fetchPost, computePainScore } from '../../../lib/reddit'
+import { searchSubredditPosts, getPostWithComments, computePainScore } from '../../../lib/xpoz'
 import { embed, psychoanalyze, synthesize } from '../../../lib/gemini'
 import {
   createSegment,
@@ -129,13 +130,17 @@ async function runPipeline(
   icp_description: string,
   subreddits: string[]
 ) {
+  let xpozClient: XpozClient | null = null
   try {
+    xpozClient = new XpozClient({ apiKey: process.env.XPOZ_API_KEY ?? '' })
+    await xpozClient.connect()
+
     console.log('[api/discover] pipeline_start', { segment_id, subreddits })
     await updateSegment(segment_id, { status: 'reading' })
     console.log('[api/discover] segment_status', { segment_id, status: 'reading' })
 
     const listingResults = await Promise.allSettled(
-      subreddits.map((subreddit) => fetchListing(subreddit, icp_description))
+      subreddits.map((subreddit) => searchSubredditPosts(subreddit, icp_description, 100, xpozClient!))
     )
     console.log('[api/discover] listing_results', {
       segment_id,
@@ -148,12 +153,11 @@ async function runPipeline(
 
     const scoredPosts: Array<{
       post: {
-        permalink: string
+        id: string
         title?: string | null
         selftext?: string | null
         score?: number | null
-        upvote_ratio?: number | null
-        num_comments?: number | null
+        commentsCount?: number | null
       }
       subreddit: string
       pain_score: number
@@ -211,7 +215,7 @@ async function runPipeline(
 
     const fragments = await Promise.allSettled(
       topPosts.map(({ post, subreddit, pain_score }) =>
-        deepReadPost(segment_id, post, subreddit, pain_score)
+        deepReadPost(segment_id, post, subreddit, pain_score, xpozClient!)
       )
     )
     console.log('[api/discover] deep_read_results', {
@@ -281,34 +285,36 @@ async function runPipeline(
       soul_document: MOCK_PERSONA.soul_document,
       persona_name: MOCK_PERSONA.persona_name,
     }).catch(() => {})
+  } finally {
+    await xpozClient?.close().catch(() => {})
   }
 }
 
 async function deepReadPost(
   segment_id: string,
   post: {
-    permalink: string
+    id: string
     title?: string | null
     selftext?: string | null
     score?: number | null
-    upvote_ratio?: number | null
-    num_comments?: number | null
+    commentsCount?: number | null
   },
   subreddit: string,
-  pain_score: number
+  pain_score: number,
+  xpozClient: XpozClient
 ) {
   console.log('[api/discover] deep_read_start', {
     segment_id,
     subreddit,
-    permalink: post.permalink,
+    post_id: post.id,
     pain_score,
   })
-  const result = await fetchPost(post.permalink)
+  const result = await getPostWithComments(post.id, xpozClient)
   if (!result) {
     console.warn('[api/discover] fetch_post_empty', {
       segment_id,
       subreddit,
-      permalink: post.permalink,
+      post_id: post.id,
     })
     return null
   }
@@ -322,8 +328,8 @@ async function deepReadPost(
     title: fullPost.title,
     body: fullPost.selftext,
     score: fullPost.score,
-    upvote_ratio: fullPost.upvote_ratio,
-    num_comments: fullPost.num_comments,
+    upvote_ratio: null,
+    num_comments: fullPost.commentsCount,
     pain_score,
   })
 
@@ -331,7 +337,7 @@ async function deepReadPost(
     console.warn('[api/discover] upsert_post_failed', {
       segment_id,
       subreddit,
-      permalink: post.permalink,
+      post_id: post.id,
     })
     return null
   }
