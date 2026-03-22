@@ -2,8 +2,13 @@ import { NextResponse } from 'next/server'
 import { waitUntil } from '@vercel/functions'
 import { XpozClient } from '@xpoz/xpoz'
 import { DiscoverSchema } from '../../../lib/validation'
-import { searchSubredditPosts, getPostWithComments, computePainScore } from '../../../lib/xpoz'
-import { embed, psychoanalyze, synthesize } from '../../../lib/gemini'
+import {
+  searchSubredditPosts,
+  getPostWithComments,
+  computePainScore,
+  xpozCircuitBreaker,
+} from '../../../lib/xpoz'
+import { embed, psychoanalyze, synthesize, type PersonaFragment } from '../../../lib/gemini'
 import {
   createSegment,
   updateSegment,
@@ -138,6 +143,57 @@ export async function POST(req: Request) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-HEAL: Track failures and auto-stop when rate is too high
+// ─────────────────────────────────────────────────────────────────────────────
+
+class PipelineHealthTracker {
+  private successes = 0
+  private failures = 0
+  private consecutiveFailures = 0
+
+  recordSuccess(): void {
+    this.successes++
+    this.consecutiveFailures = 0
+  }
+
+  recordFailure(): void {
+    this.failures++
+    this.consecutiveFailures++
+  }
+
+  shouldStop(): { stop: boolean; reason: string } {
+    const total = this.successes + this.failures
+
+    // Stop if too many consecutive failures
+    if (this.consecutiveFailures >= 5) {
+      return {
+        stop: true,
+        reason: `Too many consecutive failures (${this.consecutiveFailures}). API may be rate limiting or experiencing issues.`,
+      }
+    }
+
+    // Stop if failure rate is too high (more than 70% failures after 10 attempts)
+    if (total >= 10 && this.failures / total > 0.7) {
+      return {
+        stop: true,
+        reason: `High failure rate (${Math.round((this.failures / total) * 100)}%). Consider trying different subreddits.`,
+      }
+    }
+
+    return { stop: false, reason: '' }
+  }
+
+  getStats(): { successes: number; failures: number; failureRate: number } {
+    const total = this.successes + this.failures
+    return {
+      successes: this.successes,
+      failures: this.failures,
+      failureRate: total > 0 ? this.failures / total : 0,
+    }
+  }
+}
+
 // Timeout for Xpoz operations (15 seconds per operation)
 const XPOZ_TIMEOUT_MS = 15000
 
@@ -147,6 +203,8 @@ async function runPipeline(
   subreddits: string[]
 ) {
   let xpozClient: XpozClient | null = null
+  const healthTracker = new PipelineHealthTracker()
+
   try {
     xpozClient = new XpozClient({ apiKey: process.env.XPOZ_API_KEY ?? '', timeoutMs: XPOZ_TIMEOUT_MS })
     await xpozClient.connect()
@@ -238,45 +296,89 @@ async function runPipeline(
       return
     }
 
-    const fragments = await Promise.allSettled(
-      topPosts.map(({ post, subreddit, pain_score }) =>
-        deepReadPost(segment_id, post, subreddit, pain_score, xpozClient!)
-      )
-    )
-    console.log('[api/discover] deep_read_results', {
+    // Process posts with auto-stop on high failure rate
+    const fragments: PersonaFragment[] = []
+    let processedCount = 0
+
+    for (const { post, subreddit, pain_score } of topPosts) {
+      // Check if we should stop due to high failure rate
+      const healthCheck = healthTracker.shouldStop()
+      if (healthCheck.stop) {
+        console.warn('[api/discover] auto_stop', {
+          segment_id,
+          reason: healthCheck.reason,
+          stats: healthTracker.getStats(),
+        })
+        await addLog(segment_id, `Auto-stopped: ${healthCheck.reason}`)
+        break
+      }
+
+      // Check circuit breaker
+      if (!xpozCircuitBreaker.canExecute()) {
+        console.warn('[api/discover] circuit_breaker_open', { segment_id })
+        await addLog(segment_id, 'API temporarily unavailable - circuit breaker open')
+        break
+      }
+
+      processedCount++
+      const fragment = await deepReadPost(segment_id, post, subreddit, pain_score, xpozClient!)
+
+      if (fragment) {
+        fragments.push(fragment)
+        healthTracker.recordSuccess()
+      } else {
+        healthTracker.recordFailure()
+      }
+
+      // Log progress every 5 posts
+      if (processedCount % 5 === 0) {
+        const stats = healthTracker.getStats()
+        console.log('[api/discover] progress', {
+          segment_id,
+          processed: processedCount,
+          total: topPosts.length,
+          fragments: fragments.length,
+          failureRate: Math.round(stats.failureRate * 100) + '%',
+        })
+        await addLog(
+          segment_id,
+          `Progress: ${processedCount}/${topPosts.length} posts · ${fragments.length} fragments`
+        )
+      }
+    }
+
+    console.log('[api/discover] deep_read_complete', {
       segment_id,
-      total: fragments.length,
-      fulfilled: fragments.filter((result) => result.status === 'fulfilled').length,
+      processed: processedCount,
+      total: topPosts.length,
+      fragments: fragments.length,
+      stats: healthTracker.getStats(),
+      circuitBreaker: xpozCircuitBreaker.getStatus(),
     })
 
-    const successfulFragments = fragments.flatMap((result) =>
-      result.status === 'fulfilled' && result.value ? [result.value] : []
-    )
-    console.log('[api/discover] fragments_ready', {
-      segment_id,
-      count: successfulFragments.length,
-    })
-
-    if (successfulFragments.length < 2) {
+    if (fragments.length < 2) {
       console.warn('[api/discover] insufficient_signal', {
         segment_id,
-        count: successfulFragments.length,
-        postsAttempted: topPosts.length,
+        count: fragments.length,
+        postsAttempted: processedCount,
+        stats: healthTracker.getStats(),
       })
-      await addLog(segment_id, `Insufficient signal · ${successfulFragments.length} fragments from ${topPosts.length} posts · try different subreddits or a broader ICP`)
+      await addLog(
+        segment_id,
+        `Insufficient signal · ${fragments.length} fragments from ${processedCount} posts · try different subreddits or a broader ICP`
+      )
       await updateSegment(segment_id, {
         status: 'failed',
-        status_message:
-          `Not enough signal (${successfulFragments.length} fragments from ${topPosts.length} posts). Try different subreddits or broaden the ICP.`,
+        status_message: `Not enough signal (${fragments.length} fragments from ${processedCount} posts). Try different subreddits or broaden the ICP.`,
       })
       return
     }
 
-    await addLog(segment_id, `Synthesis started · ${successfulFragments.length} fragments`)
+    await addLog(segment_id, `Synthesis started · ${fragments.length} fragments`)
     await updateSegment(segment_id, { status: 'synthesizing' })
     console.log('[api/discover] segment_status', { segment_id, status: 'synthesizing' })
 
-    const synthesis = await synthesize(successfulFragments, icp_description)
+    const synthesis = await synthesize(fragments, icp_description)
 
     if (!synthesis) {
       console.error('[api/discover] synthesis_failed', { segment_id })
@@ -296,14 +398,15 @@ async function runPipeline(
       persona_name: synthesis.persona_name,
       segment_size: {
         posts_indexed: topPosts.length,
-        fragments_collected: successfulFragments.length,
+        fragments_collected: fragments.length,
         subreddits,
-        label: `${topPosts.length} posts - ~${successfulFragments.length * 40} comments analysed`,
+        label: `${processedCount} posts processed - ${fragments.length} fragments`,
       },
     })
     console.log('[api/discover] pipeline_complete', {
       segment_id,
       persona_name: synthesis.persona_name,
+      stats: healthTracker.getStats(),
     })
     await addLog(segment_id, `Persona ready · ${synthesis.persona_name}`)
   } catch (error) {
@@ -332,23 +435,30 @@ async function deepReadPost(
   subreddit: string,
   pain_score: number,
   xpozClient: XpozClient
-) {
+): Promise<PersonaFragment | null> {
   console.log('[api/discover] deep_read_start', {
     segment_id,
     subreddit,
     post_id: post.id,
     pain_score,
     postTitle: post.title?.substring(0, 50),
+    commentsCount: post.commentsCount,
+    score: post.score,
   })
-  await addLog(segment_id, `Reading post ${post.id} from r/${subreddit}`)
-  const result = await getPostWithComments(post.id, xpozClient)
+
+  // Pass post metadata for adaptive timeout
+  const result = await getPostWithComments(post.id, xpozClient, {
+    commentsCount: post.commentsCount,
+    score: post.score,
+  })
+
   if (!result) {
     console.warn('[api/discover] fetch_post_empty', {
       segment_id,
       subreddit,
       post_id: post.id,
       postTitle: post.title?.substring(0, 50),
-      reason: 'getPostWithComments returned null (check xpoz logs for timeout/error)',
+      commentsCount: post.commentsCount,
     })
     return null
   }
@@ -405,7 +515,6 @@ async function deepReadPost(
       post_id,
       chunkCount: rows.length,
     })
-    await addLog(segment_id, `Embeddings saved · ${rows.length} chunks from post ${post_id}`)
   } catch (error) {
     console.error('[api/discover] embeddings_failed', {
       segment_id,
@@ -421,12 +530,8 @@ async function deepReadPost(
     segment_id,
     post_id,
     success: Boolean(fragment),
+    commentsCount: comments.length,
   })
-  if (fragment) {
-    await addLog(segment_id, `Analysed post ${post_id} · fragment captured`)
-  } else {
-    await addLog(segment_id, `Analysed post ${post_id} · no fragment`)
-  }
 
   return fragment
 }

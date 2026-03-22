@@ -1,7 +1,11 @@
-import { google } from '@ai-sdk/google'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { embed as embedValue, embedMany, generateText } from 'ai'
 import { escape } from 'html-escaper'
 import { extractSuggestedSubreddits } from './intake'
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GEMINI_API_KEY,
+})
 
 const FLASH_MODEL = 'gemini-3.1-flash-lite-preview'
 const PRO_MODEL = 'gemini-3.1-pro-preview'

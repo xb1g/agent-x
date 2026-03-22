@@ -1,6 +1,19 @@
 import { normalizeSubreddit } from './validation'
 
-export type SuggestionPayload = { subreddits?: string[] } | string[] | string
+export type SubredditSuggestionWithReasoning = {
+  name: string
+  postCount: number
+  samplePosts: Array<{
+    title: string | null
+    score: number | null
+    permalink: string
+  }>
+}
+
+export type SuggestionPayload = 
+  | { suggestions?: SubredditSuggestionWithReasoning[]; subreddits?: string[] }
+  | string[]
+  | string
 
 export function buildQuery(
   customer: string,
@@ -53,9 +66,22 @@ export function extractSuggestedSubreddits(payload: SuggestionPayload): string[]
     return parseSubreddits(payload)
   }
 
+  // New format: { suggestions: [{ name, postCount, samplePosts }] }
+  if (Array.isArray(payload.suggestions)) {
+    return dedupeSubreddits(payload.suggestions.map((s) => s.name))
+  }
+
+  // Legacy format: { subreddits: string[] }
   if (Array.isArray(payload.subreddits)) {
     return dedupeSubreddits(payload.subreddits)
   }
 
+  return []
+}
+
+export function extractSuggestionReasoning(payload: SuggestionPayload): SubredditSuggestionWithReasoning[] {
+  if (typeof payload === 'object' && !Array.isArray(payload) && Array.isArray(payload.suggestions)) {
+    return payload.suggestions
+  }
   return []
 }

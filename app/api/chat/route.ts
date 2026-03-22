@@ -46,7 +46,7 @@ function escapeHtml(text: string): string {
 }
 
 function buildFallbackReply(_personaName: string) {
-  return `Look, I'm mid-sprint right now. What specifically are you trying to find out? Ask me something concrete.`
+  return `Honestly? I don't know how to answer that one. I've been thinking about it but I haven't really worked it out yet.`
 }
 
 export async function POST(req: Request) {
@@ -104,23 +104,20 @@ export async function POST(req: Request) {
     .filter(Boolean)
     .join('\n')
 
-  try {
-    const result = await generateText({
-      model: google('gemini-3.1-pro-preview'),
-      system: systemPrompt,
-      messages: messages as any,
-    })
+  const generateArgs = { system: systemPrompt, messages: messages as any }
 
-    return NextResponse.json({
-      persona_name: personaName,
-      reply: result.text,
-      fallback: false,
-    })
-  } catch {
-    return NextResponse.json({
-      persona_name: personaName,
-      reply: buildFallbackReply(personaName),
-      fallback: true,
-    })
+  for (const model of ['gemini-3.1-pro-preview', 'gemini-2.0-flash']) {
+    try {
+      const result = await generateText({ model: google(model), ...generateArgs })
+      return NextResponse.json({ persona_name: personaName, reply: result.text, fallback: false })
+    } catch {
+      // try next model
+    }
   }
+
+  return NextResponse.json({
+    persona_name: personaName,
+    reply: buildFallbackReply(personaName),
+    fallback: true,
+  })
 }

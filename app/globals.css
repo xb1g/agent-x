@@ -1093,11 +1093,41 @@ a {
   box-shadow: var(--shadow-strong);
   max-width: 320px;
   line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.toast__content {
+  flex: 1;
+  min-width: 0;
 }
 
 .toast strong {
   display: block;
   margin-bottom: 4px;
+}
+
+.toast__close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.toast__close:hover {
+  background: rgba(23, 21, 17, 0.08);
+  color: var(--ink);
 }
 
 /* ─── Wizard intake ─────────────────────────────────── */
