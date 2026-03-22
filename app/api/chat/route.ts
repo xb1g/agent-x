@@ -1,5 +1,7 @@
-import { google } from '@ai-sdk/google'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { generateText } from 'ai'
+
+const google = createGoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY })
 import { NextResponse } from 'next/server'
 import { ChatSchema } from '../../../lib/validation'
 import { getSegment, querySimilar } from '../../../lib/db'
@@ -106,13 +108,28 @@ export async function POST(req: Request) {
 
   const generateArgs = { system: systemPrompt, messages: messages as any }
 
-  for (const model of ['gemini-3.1-pro-preview', 'gemini-2.0-flash']) {
+  for (const model of ['gemini-3.1-pro-preview', 'gemini-3.1-flash-lite-preview']) {
     try {
       const result = await generateText({ model: google(model), ...generateArgs })
       return NextResponse.json({ persona_name: personaName, reply: result.text, fallback: false })
     } catch {
       // try next model
     }
+  }
+
+  // Last resort: bare prompt — no system overhead, just persona + question
+  const lastQuestion = lastUserMessage
+    ? stringifyMessageContent(lastUserMessage.content)
+    : 'tell me about your biggest frustration'
+
+  try {
+    const result = await generateText({
+      model: google('gemini-3.1-flash-lite-preview'),
+      prompt: `You are ${personaName}, a real person being interviewed about your problems and frustrations. Answer this question honestly from your own experience in 2-3 sentences. Never say you are an AI. Stay in character.\n\nQuestion: ${lastQuestion}`,
+    })
+    return NextResponse.json({ persona_name: personaName, reply: result.text, fallback: false })
+  } catch {
+    // truly dead — return a graceful in-character shrug
   }
 
   return NextResponse.json({

@@ -8,17 +8,7 @@ import {
   type SegmentCardData,
   type SegmentStatus,
 } from './components/SegmentCard'
-import {
-  buildIcpDescription,
-  buildQuery,
-  dedupeSubreddits,
-  extractSuggestedSubreddits,
-} from '../lib/intake'
-import { normalizeSubreddit } from '../lib/validation'
-
-type SuggestionResponse = {
-  subreddits?: string[]
-}
+import { buildIcpDescription } from '../lib/intake'
 
 type DiscoverResponse = {
   segment_id?: string
@@ -98,13 +88,7 @@ function logClient(event: string, details?: Record<string, unknown>) {
   console.log(`[discovery-intake] ${event}`, details ?? {})
 }
 
-const SUGGEST_STEPS = [
-  'Analyzing your inputs…',
-  'Connecting to Reddit…',
-  'Searching communities…',
-  'Filtering relevant results…',
-  'Preparing your shortlist…',
-]
+
 
 const APP_TABS: Array<{
   id: AppTab
@@ -134,9 +118,6 @@ export default function Page() {
   const [wizardProblem, setWizardProblem] = useState(
     'pricing confusion, churn, and feature creep',
   )
-  const [suggestStep, setSuggestStep] = useState(0)
-  const [subreddits, setSubreddits] = useState<string[]>([])
-  const [subredditDraft, setSubredditDraft] = useState('')
   const [segments, setSegments] = useState<SegmentCardData[]>(() => {
     if (typeof window === 'undefined') return []
     try {
@@ -152,7 +133,6 @@ export default function Page() {
   })
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
-  const [isSuggesting, setIsSuggesting] = useState(false)
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
 
@@ -206,18 +186,7 @@ export default function Page() {
     } catch {}
   }, [selectedSegmentId])
 
-  // Cycle through fake progress steps while suggesting.
-  useEffect(() => {
-    if (!isSuggesting) {
-      setSuggestStep(0)
-      return
-    }
-    setSuggestStep(1)
-    const id = setInterval(() => {
-      setSuggestStep((s) => Math.min(s + 1, SUGGEST_STEPS.length))
-    }, 550)
-    return () => clearInterval(id)
-  }, [isSuggesting])
+
 
   useEffect(() => {
     if (!activeRunId) return
@@ -289,110 +258,15 @@ export default function Page() {
         window.clearInterval(interval)
       }
     }
-  }, [activeRunId, icpDescription, startTransition, subreddits])
-
-  function handleAddSubreddit() {
-    const normalized = normalizeSubreddit(subredditDraft).replace(/^\/+/, '')
-    logClient('manual_add_attempt', {
-      draft: subredditDraft,
-      normalized,
-      currentShortlist: subreddits,
-    })
-    if (!normalized) return
-
-    if (subreddits.includes(normalized)) {
-      setBanner(`r/${normalized} is already in the shortlist.`)
-      setSubredditDraft('')
-      return
-    }
-
-    if (subreddits.length >= 5) {
-      setBanner('The shortlist is capped at five subreddits.')
-      return
-    }
-
-    startTransition(() => {
-      setSubreddits((current) => dedupeSubreddits([...current, normalized]))
-    })
-    setSubredditDraft('')
-    setBanner(`Added r/${normalized} to the shortlist.`)
-    logClient('manual_add_success', { added: normalized })
-  }
-
-  async function handleSuggestSubreddits() {
-    const query = buildQuery(wizardCustomer, wizardProblem)
-    if (query.length < 10) {
-      setBanner('Fill in your customer and their problem to get suggestions.')
-      return
-    }
-
-    logClient('suggest_start', {
-      queryLength: query.length,
-      hasCustomer: !!wizardCustomer.trim(),
-      hasProblem: !!wizardProblem.trim(),
-      currentShortlist: subreddits,
-    })
-    setIsSuggesting(true)
-    setBanner(null)
-
-    try {
-      const response = await fetch('/api/suggest-subreddits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ icp_description: query }),
-      })
-      logClient('suggest_response', {
-        ok: response.ok,
-        status: response.status,
-        contentType: response.headers.get('content-type'),
-      })
-
-      if (!response.ok) {
-        throw new Error('suggestions failed')
-      }
-
-      const contentType = response.headers.get('content-type') ?? ''
-      const payload = contentType.includes('application/json')
-        ? ((await response.json()) as SuggestionResponse | string[])
-        : await response.text()
-
-      const next = extractSuggestedSubreddits(payload)
-      logClient('suggest_payload_parsed', {
-        next,
-        rawPayloadType: Array.isArray(payload) ? 'array' : typeof payload,
-      })
-      if (!next.length) {
-        setBanner('No subreddit suggestions came back. Add one manually to continue.')
-        logClient('suggest_empty')
-        return
-      }
-
-      startTransition(() => {
-        setSubreddits(next)
-      })
-      setBanner(`Shortlisted ${next.length} subreddit${next.length === 1 ? '' : 's'}.`)
-    } catch {
-      logClient('suggest_failed')
-      setBanner('Suggestions were unavailable. Add one or more subreddits manually to continue.')
-    } finally {
-      setIsSuggesting(false)
-    }
-  }
+  }, [activeRunId, icpDescription])
 
   async function handleDiscover() {
     const trimmed = icpDescription
     if (!trimmed) return
 
-    const shortlist = dedupeSubreddits(subreddits)
     logClient('discover_attempt', {
       icpLength: trimmed.length,
-      shortlist,
     })
-    if (!shortlist.length) {
-      setBanner('Add at least one subreddit before starting discovery.')
-      logClient('discover_blocked_no_shortlist')
-      return
-    }
 
     setIsDiscovering(true)
     setBanner(null)
@@ -400,14 +274,14 @@ export default function Page() {
     const tempSegment: SegmentCardData = {
       id: uid('segment'),
       icp_description: trimmed,
-      subreddits: shortlist,
+      subreddits: [],
       status: 'indexing',
-      status_message: 'The coordinator has kicked off the background discovery pipeline.',
+      status_message: 'Searching for relevant posts across Reddit...',
       persona_name: null,
       segment_size: {
         posts_indexed: 0,
         fragments_collected: 0,
-        subreddits: shortlist,
+        subreddits: [],
         label: 'Queued',
       },
       pain_signals: ['Starting discovery run'],
@@ -426,7 +300,6 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           icp_description: trimmed,
-          subreddits: shortlist,
         }),
       })
       logClient('discover_response', {
@@ -455,7 +328,7 @@ export default function Page() {
         setSelectedSegmentId(runId)
       })
 
-      setBanner('Discovery started. The board will update as segments resolve.')
+      setBanner('Discovery started. Finding relevant posts...')
     } catch {
       logClient('discover_failed')
       setBanner('Discovery could not reach the backend, but the intake panel still works locally.')
@@ -551,10 +424,7 @@ export default function Page() {
             <span>In flight</span>
             <strong>{metrics.pending}</strong>
           </div>
-          <div className="shell-stat">
-            <span>Shortlist</span>
-            <strong>{subreddits.length}</strong>
-          </div>
+
         </div>
 
         <nav className="tab-nav" aria-label="Workspace tabs">
@@ -596,7 +466,7 @@ export default function Page() {
                   first screen without relying on fallback defaults.
                 </p>
               </div>
-              <div className="status-line">{isPending || isSuggesting || isDiscovering ? 'Working' : 'Idle'}</div>
+              <div className="status-line">{isPending || isDiscovering ? 'Working' : 'Idle'}</div>
             </div>
 
             <div className="panel__priority-grid">
@@ -629,95 +499,20 @@ export default function Page() {
                   />
                 </div>
 
-                <div className="wizard-suggest-row">
-                  <button
-                    type="button"
-                    className="primary wizard-suggest-btn"
-                    onClick={handleSuggestSubreddits}
-                    disabled={isSuggesting}
-                  >
-                    {isSuggesting ? 'Finding subreddits…' : 'Suggest subreddits'}
-                  </button>
-                </div>
-
-                {isSuggesting && suggestStep > 0 && (
-                  <div className="suggest-progress">
-                    <div className="suggest-progress__bar">
-                      <div
-                        className="suggest-progress__fill"
-                        style={{ width: `${(suggestStep / SUGGEST_STEPS.length) * 100}%` }}
-                      />
-                    </div>
-                    <span className="suggest-progress__label">
-                      {SUGGEST_STEPS[suggestStep - 1]}
-                    </span>
-                  </div>
-                )}
-
-                <div className="field" style={{ marginTop: 18 }}>
-                  <label>Discovery shortlist</label>
-                  <div className="chip-row">
-                    {subreddits.length ? (
-                      subreddits.map((subreddit) => (
-                        <button
-                          key={subreddit}
-                          type="button"
-                          className={`chip ${subreddits.includes(subreddit) ? 'is-selected' : ''}`}
-                          onClick={() =>
-                            startTransition(() => {
-                              setSubreddits((current) => current.filter((item) => item !== subreddit))
-                            })
-                          }
-                        >
-                          r/{subreddit}
-                        </button>
-                      ))
-                    ) : (
-                      <div className="chip-row__empty">
-                        No subreddits yet — click "Suggest subreddits" or add one below.
-                      </div>
-                    )}
-                  </div>
-                  <div className="field__help">Max five. Click a chip to remove it.</div>
-                </div>
-
-                <div className="field">
-                  <label htmlFor="subreddit-draft">Add subreddit manually</label>
-                  <div className="field__inline">
-                    <input
-                      id="subreddit-draft"
-                      value={subredditDraft}
-                      onChange={(event) => setSubredditDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          handleAddSubreddit()
-                        }
-                      }}
-                      placeholder="e.g. SaaS or indiehackers"
-                    />
-                    <button type="button" onClick={handleAddSubreddit} disabled={!subredditDraft.trim()}>
-                      Add
-                    </button>
-                  </div>
-                </div>
-
-                <div className="actions">
+                <div className="actions" style={{ marginTop: 24 }}>
                   <button
                     type="button"
                     className="primary"
                     onClick={handleDiscover}
-                    disabled={isDiscovering || subreddits.length === 0}
+                    disabled={isDiscovering}
                   >
-                    {isDiscovering ? 'Launching…' : 'Research this segment'}
+                    {isDiscovering ? 'Searching Reddit…' : 'Research this segment'}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setWizardCustomer('')
                       setWizardProblem('')
-                      setSubredditDraft('')
-                      setSubreddits([])
                     }}
                   >
                     Clear inputs
@@ -739,10 +534,6 @@ export default function Page() {
                     <dt>In flight</dt>
                     <dd>{metrics.pending}</dd>
                   </div>
-                  <div className="signal-meta__item">
-                    <dt>Shortlist</dt>
-                    <dd>{subreddits.length}</dd>
-                  </div>
                 </dl>
 
                 <div className="timeline" aria-label="Discovery flow">
@@ -756,8 +547,15 @@ export default function Page() {
                   <div className="timeline__step">
                     <span>2</span>
                     <div>
-                      <strong>Confirm the subreddits</strong>
-                      <small>The shortlist should feel plausible to someone inside the segment.</small>
+                      <strong>AI finds relevant posts</strong>
+                      <small>Searches Reddit for people with similar problems.</small>
+                    </div>
+                  </div>
+                  <div className="timeline__step">
+                    <span>3</span>
+                    <div>
+                      <strong>Persona synthesized</strong>
+                      <small>Deep analysis of pain points and motivations.</small>
                     </div>
                   </div>
                 </div>
@@ -840,6 +638,20 @@ export default function Page() {
           hidden={activeTab !== 'interview'}
           className="tab-panel"
         >
+          {segments.filter((s) => s.status === 'ready').length > 0 && (
+            <div className="persona-picker">
+              {segments.filter((s) => s.status === 'ready').map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`persona-picker__chip ${s.id === selectedSegmentId ? 'is-active' : ''}`}
+                  onClick={() => setSelectedSegmentId(s.id)}
+                >
+                  {s.persona_name ?? s.icp_description.slice(0, 30)}
+                </button>
+              ))}
+            </div>
+          )}
           <PersonaChat key={selectedSegment?.id ?? 'empty'} segment={selectedSegment} />
         </section>
       </main>

@@ -18,8 +18,8 @@ export const DiscoverSchema = z.object({
   icp_description: z.string().min(10).max(500),
   subreddits: z
     .array(z.string().min(2).max(50).transform(normalizeSubreddit))
-    .min(1)
-    .max(5),
+    .max(5)
+    .optional(),
 })
 
 export const ChatSchema = z.object({

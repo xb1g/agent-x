@@ -140,6 +140,11 @@ export async function synthesize(
   fragments: PersonaFragment[],
   icpDescription: string
 ): Promise<{ soul_document: string; persona_name: string } | null> {
+  console.log('[gemini] synthesize_start', {
+    fragmentCount: fragments.length,
+    icpLength: icpDescription.length,
+  })
+
   const prompt = `You are building a character bible for a customer discovery persona.
 ICP description: ${escape(icpDescription)}
 
@@ -161,6 +166,11 @@ ${escape(JSON.stringify(fragments, null, 2))}`
       prompt,
     })
 
+    console.log('[gemini] synthesize_raw_response', {
+      length: text.length,
+      preview: text.substring(0, 200),
+    })
+
     const parsed = JSON.parse(stripCodeFences(text)) as {
       persona_name?: unknown
       soul_document?: unknown
@@ -170,14 +180,28 @@ ${escape(JSON.stringify(fragments, null, 2))}`
       typeof parsed.persona_name !== 'string' ||
       typeof parsed.soul_document !== 'string'
     ) {
+      console.error('[gemini] synthesize_invalid_response', {
+        hasPersonaName: typeof parsed.persona_name === 'string',
+        hasSoulDocument: typeof parsed.soul_document === 'string',
+        parsed,
+      })
       return null
     }
+
+    console.log('[gemini] synthesize_success', {
+      persona_name: parsed.persona_name,
+      soulDocumentLength: parsed.soul_document.length,
+    })
 
     return {
       persona_name: parsed.persona_name,
       soul_document: parsed.soul_document,
     }
-  } catch {
+  } catch (error) {
+    console.error('[gemini] synthesize_error', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
     return null
   }
 }

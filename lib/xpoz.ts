@@ -135,9 +135,9 @@ export function computePainScore(post: Partial<XpozPost>): number {
 // AUTO-HEAL: Retry with exponential backoff
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_TIMEOUT_MS = 15000
-const MAX_RETRIES = 2
-const BASE_DELAY_MS = 1000
+const DEFAULT_TIMEOUT_MS = 20000
+const MAX_RETRIES = 3
+const BASE_DELAY_MS = 500
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -249,8 +249,8 @@ export class CircuitBreaker {
   }
 }
 
-// Global circuit breaker for Xpoz operations
-export const xpozCircuitBreaker = new CircuitBreaker(5, 30000)
+// Global circuit breaker for Xpoz operations (higher threshold, shorter reset)
+export const xpozCircuitBreaker = new CircuitBreaker(10, 20000)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTO-HEAL: Adaptive timeout based on post characteristics
@@ -555,23 +555,8 @@ Output only the JSON array, no explanation.`,
 // Step 3: Score posts by relevance to ICP
 async function scorePostRelevance(
   icpDescription: string,
-  posts: Array<{
-    id: string
-    title: string | null
-    selftext: string | null
-    subredditName: string
-    score: number | null
-    permalink: string
-  }>
-): Promise<Array<{
-  id: string
-  title: string | null
-  selftext: string | null
-  subredditName: string
-  score: number | null
-  permalink: string
-  relevanceScore: number
-}>> {
+  posts: XpozPost[]
+): Promise<Array<XpozPost & { relevanceScore: number }>> {
   if (posts.length === 0) return []
 
   console.log('[suggest] step_3_scoring_posts', { count: posts.length })
@@ -640,14 +625,7 @@ export async function suggestSubreddits(
   // Step 2: Search for posts with each query
   try {
     const allPosts = await withClient(async (c) => {
-      const posts: Array<{
-        id: string
-        title: string | null
-        selftext: string | null
-        subredditName: string
-        score: number | null
-        permalink: string
-      }> = []
+      const posts: XpozPost[] = []
 
       for (const searchQuery of searchQueries) {
         console.log('[suggest] step_2_searching', { query: searchQuery })
@@ -673,8 +651,10 @@ export async function suggestSubreddits(
             id: String(p.id ?? ''),
             title: (p.title as string | null) ?? null,
             selftext: (p.selftext as string | null) ?? null,
-            subredditName: String(p.subredditName ?? ''),
+            authorUsername: String(p.authorUsername ?? 'unknown'),
             score: (p.score as number | null) ?? null,
+            commentsCount: (p.commentsCount as number | null) ?? null,
+            subredditName: String(p.subredditName ?? ''),
             permalink: String(p.permalink ?? ''),
           })
         }
@@ -771,4 +751,120 @@ export async function suggestSubreddits(
       postCount: 0,
       samplePosts: [],
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST-BASED DISCOVERY: Find relevant posts directly from ICP
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RelevantPost = XpozPost & {
+  relevanceScore: number
+  painScore: number
+}
+
+/**
+ * Find relevant posts across Reddit based on ICP description.
+ * This replaces the subreddit-based discovery with direct post search.
+ */
+export async function findRelevantPosts(
+  icpDescription: string,
+  limit: number = 50,
+  client?: XpozClient
+): Promise<RelevantPost[]> {
+  console.log('[findPosts] start', { icp: icpDescription, limit })
+
+  // Check circuit breaker
+  if (!xpozCircuitBreaker.canExecute()) {
+    console.warn('[findPosts] circuit_open')
+    return []
+  }
+
+  // Step 1: Generate search queries optimized for finding similar posts
+  const searchQueries = await generatePostSearchQueries(icpDescription)
+  console.log('[findPosts] queries_generated', { queries: searchQueries })
+
+  // Step 2: Search for posts with each query
+  try {
+    const allPosts = await withClient(async (c) => {
+      const posts: XpozPost[] = []
+      const seen = new Set<string>()
+
+      for (const searchQuery of searchQueries) {
+        console.log('[findPosts] searching', { query: searchQuery })
+
+        const results = await c.reddit.searchPosts(searchQuery, {
+          sort: 'relevance',
+          limit: 30,
+        })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const queryPosts = results.data as any[]
+
+        console.log('[findPosts] posts_found', {
+          query: searchQuery,
+          count: queryPosts.length,
+        })
+
+        for (const p of queryPosts) {
+          const id = String(p.id ?? '')
+          if (!id || seen.has(id)) continue
+          seen.add(id)
+
+          posts.push({
+            id,
+            title: (p.title as string | null) ?? null,
+            selftext: (p.selftext as string | null) ?? null,
+            authorUsername: String(p.authorUsername ?? 'unknown'),
+            score: (p.score as number | null) ?? null,
+            commentsCount: (p.commentsCount as number | null) ?? null,
+            subredditName: String(p.subredditName ?? ''),
+            permalink: String(p.permalink ?? ''),
+          })
+        }
+      }
+
+      return posts
+    }, client)
+
+    console.log('[findPosts] total_unique_posts', { count: allPosts.length })
+
+    if (allPosts.length === 0) {
+      return []
+    }
+
+    // Step 3: Score posts by relevance to ICP
+    const scoredPosts = await scorePostRelevance(icpDescription, allPosts)
+
+    // Step 4: Add pain scores and sort by relevance
+    const relevantPosts: RelevantPost[] = scoredPosts
+      .map((p) => ({
+        ...p,
+        painScore: computePainScore(p),
+      }))
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, limit)
+
+    xpozCircuitBreaker.recordSuccess()
+
+    console.log('[findPosts] final_posts', {
+      count: relevantPosts.length,
+      topPosts: relevantPosts.slice(0, 5).map((p) => ({
+        title: p.title?.slice(0, 60),
+        subreddit: p.subredditName,
+        relevanceScore: p.relevanceScore,
+        painScore: p.painScore,
+      })),
+    })
+
+    return relevantPosts
+  } catch (error) {
+    xpozCircuitBreaker.recordFailure()
+    if (error instanceof OperationTimeoutError) {
+      console.warn('[findPosts] error_timeout', { operationId: error.operationId })
+    } else if (error instanceof OperationFailedError) {
+      console.warn('[findPosts] error_failed', { message: error.message })
+    } else {
+      console.error('[findPosts] error', { error })
+    }
+    return []
+  }
 }
