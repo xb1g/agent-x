@@ -146,6 +146,48 @@ async function withClient<T>(
   }
 }
 
+// Build focused pain-signal queries from an ICP description.
+// Extracts the problem half (after "—") and generates multiple targeted queries.
+export function buildSearchQueries(icpDescription: string): string[] {
+  // Split on "—" to separate customer description from problem description
+  const parts = icpDescription.split(/\s*[—–-]\s*/)
+  const problemPart = parts.length > 1 ? parts.slice(1).join(' ') : icpDescription
+
+  // Split on commas and "and" to get individual pain themes
+  const themes = problemPart
+    .split(/[,\n]|(?:\s+and\s+)/i)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 3)
+
+  const queries: string[] = []
+
+  // One query per pain theme with complaint framing
+  for (const theme of themes.slice(0, 3)) {
+    queries.push(`${theme} problem help struggling`)
+  }
+
+  // Fallback: treat the whole problem part as one query
+  if (queries.length === 0) {
+    queries.push(`${icpDescription} struggling frustrated advice`)
+  }
+
+  return queries
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizePost(p: any, fallbackSubreddit: string): XpozPost {
+  return {
+    id: String(p.id ?? ''),
+    title: (p.title as string | null) ?? null,
+    selftext: (p.selftext as string | null) ?? null,
+    authorUsername: String(p.authorUsername ?? 'unknown'),
+    score: (p.score as number | null) ?? null,
+    commentsCount: (p.commentsCount as number | null) ?? null,
+    subredditName: String(p.subredditName ?? fallbackSubreddit),
+    permalink: String(p.permalink ?? ''),
+  }
+}
+
 export async function searchSubredditPosts(
   subreddit: string,
   query: string,
@@ -153,34 +195,51 @@ export async function searchSubredditPosts(
   client?: XpozClient
 ): Promise<XpozPost[]> {
   const normalized = normalizeSubreddit(subreddit)
-  try {
-    return await withClient(async (c) => {
-      const results = await c.reddit.searchPosts(
-        `${query} struggling frustrated help`,
-        { subreddit: normalized, sort: 'new' }
-      )
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (results.data as any[]).map((p) => ({
-        id: String(p.id ?? ''),
-        title: (p.title as string | null) ?? null,
-        selftext: (p.selftext as string | null) ?? null,
-        authorUsername: String(p.authorUsername ?? 'unknown'),
-        score: (p.score as number | null) ?? null,
-        commentsCount: (p.commentsCount as number | null) ?? null,
-        subredditName: String(p.subredditName ?? normalized),
-        permalink: String(p.permalink ?? ''),
-      }))
-    }, client)
-  } catch (error) {
-    if (error instanceof OperationTimeoutError) {
-      console.warn('[xpoz] searchPosts_timeout', { subreddit: normalized, operationId: error.operationId })
-    } else if (error instanceof OperationFailedError) {
-      console.warn('[xpoz] searchPosts_failed', { subreddit: normalized, message: error.message })
-    } else {
-      console.error('[xpoz] searchPosts_error', { subreddit: normalized, error })
+  const queries = buildSearchQueries(query)
+
+  const allResults = await Promise.allSettled(
+    queries.map((q) =>
+      withClient(async (c) => {
+        const results = await c.reddit.searchPosts(q, {
+          subreddit: normalized,
+          sort: 'relevance',
+        })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (results.data as any[]).map((p) => normalizePost(p, normalized))
+      }, client).catch((error) => {
+        if (error instanceof OperationTimeoutError) {
+          console.warn('[xpoz] searchPosts_timeout', { subreddit: normalized, query: q, operationId: error.operationId })
+        } else if (error instanceof OperationFailedError) {
+          console.warn('[xpoz] searchPosts_failed', { subreddit: normalized, query: q, message: error.message })
+        } else {
+          console.error('[xpoz] searchPosts_error', { subreddit: normalized, query: q, error })
+        }
+        return [] as XpozPost[]
+      })
+    )
+  )
+
+  // Deduplicate by post id across all query results
+  const seen = new Set<string>()
+  const merged: XpozPost[] = []
+  for (const result of allResults) {
+    const posts = result.status === 'fulfilled' ? result.value : []
+    for (const post of posts) {
+      if (post.id && !seen.has(post.id)) {
+        seen.add(post.id)
+        merged.push(post)
+      }
     }
-    return []
   }
+
+  console.log('[xpoz] searchSubredditPosts_merged', {
+    subreddit: normalized,
+    queries: queries.length,
+    total: merged.length,
+    limit,
+  })
+
+  return merged.slice(0, limit)
 }
 
 export async function getPostWithComments(
@@ -214,7 +273,7 @@ export async function getPostWithComments(
         authorUsername?: unknown
         score?: unknown
       }>)
-        .slice(0, 20)
+        .slice(0, 50)
         .map((c) => ({
           body: String(c.body ?? ''),
           authorUsername: String(c.authorUsername ?? 'unknown'),

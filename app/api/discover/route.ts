@@ -159,14 +159,20 @@ async function runPipeline(
     const listingResults = await Promise.allSettled(
       subreddits.map((subreddit) => searchSubredditPosts(subreddit, icp_description, 100, xpozClient!))
     )
-    console.log('[api/discover] listing_results', {
-      segment_id,
-      settled: listingResults.map((result, index) => ({
-        subreddit: subreddits[index],
-        status: result.status,
-        count: result.status === 'fulfilled' ? result.value.length : 0,
-      })),
-    })
+    const listingSummary = listingResults.map((result, index) => ({
+      subreddit: subreddits[index],
+      status: result.status,
+      count: result.status === 'fulfilled' ? result.value.length : 0,
+    }))
+    console.log('[api/discover] listing_results', { segment_id, settled: listingSummary })
+    for (const { subreddit, count, status } of listingSummary) {
+      await addLog(
+        segment_id,
+        status === 'fulfilled'
+          ? `r/${subreddit} · ${count} posts found`
+          : `r/${subreddit} · search failed`
+      )
+    }
 
     const scoredPosts: Array<{
       post: {
@@ -251,16 +257,17 @@ async function runPipeline(
       count: successfulFragments.length,
     })
 
-    if (successfulFragments.length < 5) {
+    if (successfulFragments.length < 2) {
       console.warn('[api/discover] insufficient_signal', {
         segment_id,
         count: successfulFragments.length,
+        postsAttempted: topPosts.length,
       })
-      await addLog(segment_id, `Insufficient signal · ${successfulFragments.length} fragments collected`)
+      await addLog(segment_id, `Insufficient signal · ${successfulFragments.length} fragments from ${topPosts.length} posts · try different subreddits or a broader ICP`)
       await updateSegment(segment_id, {
         status: 'failed',
         status_message:
-          'Not enough signal - try broader keywords or different subreddits.',
+          `Not enough signal (${successfulFragments.length} fragments from ${topPosts.length} posts). Try different subreddits or broaden the ICP.`,
       })
       return
     }
