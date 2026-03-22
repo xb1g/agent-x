@@ -1,0 +1,14 @@
+commands:
+  install: pnpm install
+  typecheck: npx tsc --noEmit
+  build: pnpm build
+  test: pnpm tsx --test lib/*.test.ts
+  dev: PORT=3100 pnpm dev
+
+services:
+  web:
+    start: PORT=3100 pnpm dev
+    stop: lsof -ti :3100 | xargs kill 2>/dev/null
+    healthcheck: curl -sf http://localhost:3100
+    port: 3100
+    depends_on: []
