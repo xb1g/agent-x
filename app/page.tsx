@@ -9,7 +9,6 @@ import {
   type SegmentStatus,
 } from './components/SegmentCard'
 import { buildIcpDescription } from '../lib/intake'
-import { suggestSegments, suggestProblems } from '../lib/gemini'
 
 // Prospect type for inspect modal
 type Prospect = {
@@ -103,6 +102,19 @@ function logClient(event: string, details?: Record<string, unknown>) {
 
 
 
+const DEFAULT_SEGMENTS = [
+  'Early-stage founders (pre-revenue)',
+  'Bootstrapped founders',
+  'B2B SaaS founders',
+  'E-commerce store owners',
+]
+
+const DEFAULT_PROBLEMS: Record<string, string[]> = {
+  'SaaS': ['Customer churn', 'Pricing strategy', 'Feature prioritization', 'Finding product-market fit'],
+  'founders': ['Finding customers', 'Raising funding', 'Building the right product', 'Time management'],
+  'default': ['Finding customers', 'Growing revenue', 'Managing time', 'Building the right product'],
+}
+
 const APP_TABS: Array<{
   id: AppTab
   label: string
@@ -154,6 +166,10 @@ export default function Page() {
   const [aiSegments, setAiSegments] = useState<string[]>([])
   const [aiProblems, setAiProblems] = useState<string[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [segmentError, setSegmentError] = useState<string | null>(null)
+  const [problemError, setProblemError] = useState<string | null>(null)
+  const [customSegmentInput, setCustomSegmentInput] = useState('')
+  const [customProblemInput, setCustomProblemInput] = useState('')
 
   // Hydrate from localStorage after mount to avoid SSR mismatch
   useEffect(() => {
@@ -455,40 +471,124 @@ export default function Page() {
   }
 
   // Wizard handlers
+  function getFallbackSegments(input: string): string[] {
+    const lowerInput = input.toLowerCase()
+    if (lowerInput.includes('saas') || lowerInput.includes('software')) {
+      return ['B2B SaaS founders', 'Bootstrapped SaaS founders', 'Early-stage SaaS founders']
+    }
+    if (lowerInput.includes('founder') || lowerInput.includes('startup')) {
+      return ['Early-stage founders (pre-revenue)', 'Bootstrapped founders', 'Solo founders']
+    }
+    if (lowerInput.includes('ecommerce') || lowerInput.includes('e-commerce') || lowerInput.includes('shopify')) {
+      return ['E-commerce store owners', 'DTC brand founders', 'Shopify store owners']
+    }
+    return DEFAULT_SEGMENTS
+  }
+
+  function getFallbackProblems(segment: string): string[] {
+    const lowerSegment = segment.toLowerCase()
+    if (lowerSegment.includes('saas')) {
+      return DEFAULT_PROBLEMS['SaaS']
+    }
+    if (lowerSegment.includes('founder')) {
+      return DEFAULT_PROBLEMS['founders']
+    }
+    return DEFAULT_PROBLEMS['default']
+  }
+
   async function handleAnalyzeCustomer() {
     if (!roughInput.trim()) return
     setIsAnalyzing(true)
+    setSegmentError(null)
     try {
-      const segments = await suggestSegments(roughInput)
+      const res = await fetch('/api/wizard/segments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roughInput }),
+      })
+      if (!res.ok) {
+        throw new Error(`API error: ${res.status}`)
+      }
+      const data = await res.json()
+      const segments = data.segments || []
+      if (segments.length === 0) {
+        setBanner('Couldn\'t generate suggestions. Try being more specific about your customer.')
+        setAiSegments([])
+        return
+      }
       setAiSegments(segments)
       setWizardStep('segment')
     } catch (error) {
       console.error('Failed to analyze customer:', error)
+      setSegmentError('Failed to load AI suggestions. Using fallback options.')
+      setAiSegments(getFallbackSegments(roughInput))
+      setWizardStep('segment')
     } finally {
       setIsAnalyzing(false)
     }
   }
 
   async function handleSelectSegment() {
-    if (!wizardSelectedSegment) return
+    if (!wizardSelectedSegment && !customSegmentInput.trim()) return
     setIsAnalyzing(true)
+    setProblemError(null)
+    const selectedSegmentValue = wizardSelectedSegment || customSegmentInput.trim()
     try {
-      const problems = await suggestProblems(wizardSelectedSegment)
+      const res = await fetch('/api/wizard/problems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segment: selectedSegmentValue }),
+      })
+      if (!res.ok) {
+        throw new Error(`API error: ${res.status}`)
+      }
+      const data = await res.json()
+      const problems = data.problems || []
+      if (problems.length === 0) {
+        setBanner('Couldn\'t find common problems. Try selecting a different segment.')
+        setAiProblems([])
+        return
+      }
       setAiProblems(problems)
       setWizardStep('problem')
     } catch (error) {
       console.error('Failed to get problems:', error)
+      setProblemError('Failed to load AI suggestions. Using fallback options.')
+      setAiProblems(getFallbackProblems(selectedSegmentValue))
+      setWizardStep('problem')
     } finally {
       setIsAnalyzing(false)
     }
   }
 
   function handleStartResearch() {
-    const customer = wizardSelectedSegment || roughInput
-    const problem = wizardSelectedProblem || ''
+    const customer = wizardSelectedSegment || customSegmentInput.trim() || roughInput
+    const problem = wizardSelectedProblem || customProblemInput.trim() || ''
     setWizardCustomer(customer)
     setWizardProblem(problem)
     handleDiscover()
+  }
+
+  function handleRetrySegments() {
+    setSegmentError(null)
+    setAiSegments([])
+    void handleAnalyzeCustomer()
+  }
+
+  function handleRetryProblems() {
+    setProblemError(null)
+    setAiProblems([])
+    void handleSelectSegment()
+  }
+
+  function handleSkipSegment() {
+    setSegmentError(null)
+    setWizardStep('segment')
+  }
+
+  function handleSkipProblems() {
+    setProblemError(null)
+    setWizardStep('problem')
   }
 
   async function handleRestart(failed: SegmentCardData) {
@@ -529,14 +629,7 @@ export default function Page() {
     }
   }
 
-  const liveSegments = segments
-  const boardLabel = liveSegments.length > 0 ? 'Live slate' : 'Empty slate'
-  const activeTabMeta = APP_TABS.find((tab) => tab.id === activeTab) ?? APP_TABS[0]
-  const statusMessage = activeRunId
-    ? `Run active • ${formatStatus('indexing')}`
-    : selectedSegment
-      ? `Focused on ${selectedSegment.persona_name ?? 'the selected segment'}`
-      : 'Waiting for the first discovery run'
+  const boardLabel = segments.length > 0 ? 'Live slate' : 'Empty slate'
 
   return (
     <div className="app-shell">
@@ -579,35 +672,7 @@ export default function Page() {
         </nav>
       </header>
 
-      <header className="container shell-header">
-        <div className="shell-header__intro">
-          <div>
-            <p className="eyebrow">Customer Discovery Workspace</p>
-            <h1>Research, review the board, then interview the persona.</h1>
-            <p>{activeTabMeta.description}</p>
-          </div>
 
-          <div className="status-line" aria-live="polite">
-            <span className="status-dot" />
-            {statusMessage}
-          </div>
-        </div>
-
-        <div className="shell-header__meta">
-          <div className="shell-stat">
-            <span>Segments</span>
-            <strong>{metrics.active}</strong>
-          </div>
-          <div className="shell-stat">
-            <span>Ready</span>
-            <strong>{metrics.ready}</strong>
-          </div>
-          <div className="shell-stat">
-            <span>In flight</span>
-            <strong>{metrics.pending}</strong>
-          </div>
-        </div>
-      </header>
 
       <main className="container tab-panels">
         <section
@@ -642,40 +707,51 @@ export default function Page() {
                       </label>
                       <textarea
                         id="wizard-rough-input"
-                        className="wizard-input-large"
+                        className={`wizard-input-large ${isAnalyzing ? 'is-loading' : ''}`}
                         value={roughInput}
                         onChange={(e) => setRoughInput(e.target.value)}
                         placeholder="Describe your customer in plain language... (e.g., 'SaaS founders who are struggling with pricing')"
                         rows={4}
+                        disabled={isAnalyzing}
                       />
                     </div>
 
-                    <div className="wizard-examples">
-                      <span className="wizard-examples__label">Examples:</span>
-                      <div className="wizard-examples__chips">
-                        <button
-                          type="button"
-                          className="wizard-example-chip"
-                          onClick={() => setRoughInput('Bootstrapped SaaS founders with $10k-$100k MRR struggling with pricing')}
-                        >
-                          Bootstrapped SaaS founders
-                        </button>
-                        <button
-                          type="button"
-                          className="wizard-example-chip"
-                          onClick={() => setRoughInput('Freelance designers who want to productize their services')}
-                        >
-                          Freelance designers
-                        </button>
-                        <button
-                          type="button"
-                          className="wizard-example-chip"
-                          onClick={() => setRoughInput('Remote team managers dealing with async communication challenges')}
-                        >
-                          Remote team managers
-                        </button>
+                    {isAnalyzing ? (
+                      <div className="wizard-loading">
+                        <span className="wizard-loading__spinner" />
+                        <span>Analyzing your input...</span>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="wizard-examples">
+                        <span className="wizard-examples__label">Examples:</span>
+                        <div className="wizard-examples__chips">
+                          <button
+                            type="button"
+                            className="wizard-example-chip"
+                            onClick={() => setRoughInput('Bootstrapped SaaS founders with $10k-$100k MRR struggling with pricing')}
+                            disabled={isAnalyzing}
+                          >
+                            Bootstrapped SaaS founders
+                          </button>
+                          <button
+                            type="button"
+                            className="wizard-example-chip"
+                            onClick={() => setRoughInput('Freelance designers who want to productize their services')}
+                            disabled={isAnalyzing}
+                          >
+                            Freelance designers
+                          </button>
+                          <button
+                            type="button"
+                            className="wizard-example-chip"
+                            onClick={() => setRoughInput('Remote team managers dealing with async communication challenges')}
+                            disabled={isAnalyzing}
+                          >
+                            Remote team managers
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="wizard-nav">
                       <button
@@ -684,7 +760,7 @@ export default function Page() {
                         onClick={handleAnalyzeCustomer}
                         disabled={isAnalyzing || !roughInput.trim()}
                       >
-                        {isAnalyzing ? 'Analyzing…' : 'Next →'}
+                        {isAnalyzing ? 'Analyzing...' : 'Next →'}
                       </button>
                     </div>
                   </div>
@@ -700,24 +776,70 @@ export default function Page() {
                       </label>
                     </div>
 
-                    <div className="wizard-options">
-                      {aiSegments.map((segment, index) => (
+                    {segmentError && (
+                      <div className="wizard-error">
+                        <p>{segmentError}</p>
                         <button
-                          key={index}
                           type="button"
-                          className={`wizard-option ${wizardSelectedSegment === segment ? 'is-selected' : ''}`}
-                          onClick={() => setWizardSelectedSegment(segment)}
+                          className="wizard-error__retry"
+                          onClick={handleRetrySegments}
+                          disabled={isAnalyzing}
                         >
-                          <span className="wizard-option__radio" />
-                          <span className="wizard-option__text">{segment}</span>
+                          Retry
                         </button>
-                      ))}
-                    </div>
+                      </div>
+                    )}
+
+                    {isAnalyzing ? (
+                      <div className="wizard-loading">
+                        <span className="wizard-loading__spinner" />
+                        <span>Finding common problems...</span>
+                      </div>
+                    ) : (
+                      <div className="wizard-options">
+                        {aiSegments.map((segment, index) => (
+                          <button
+                            key={index}
+                            type="button"
+                            className={`wizard-option ${wizardSelectedSegment === segment ? 'is-selected' : ''}`}
+                            onClick={() => {
+                              setWizardSelectedSegment(segment)
+                              setCustomSegmentInput('')
+                            }}
+                            disabled={isAnalyzing}
+                          >
+                            <span className="wizard-option__radio" />
+                            <span className="wizard-option__text">{segment}</span>
+                          </button>
+                        ))}
+                        <div className="wizard-option wizard-option--custom">
+                          <span className="wizard-option__radio" />
+                          <input
+                            type="text"
+                            placeholder="Or type your own segment..."
+                            value={customSegmentInput}
+                            onChange={(e) => {
+                              setCustomSegmentInput(e.target.value)
+                              if (e.target.value.trim()) {
+                                setWizardSelectedSegment(null)
+                              }
+                            }}
+                            disabled={isAnalyzing}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <div className="wizard-nav">
                       <button
                         type="button"
-                        onClick={() => setWizardStep('customer')}
+                        onClick={() => {
+                          setWizardStep('customer')
+                          setSegmentError(null)
+                          setAiSegments([])
+                          setCustomSegmentInput('')
+                        }}
+                        disabled={isAnalyzing}
                       >
                         ← Back
                       </button>
@@ -725,9 +847,9 @@ export default function Page() {
                         type="button"
                         className="primary"
                         onClick={handleSelectSegment}
-                        disabled={isAnalyzing || !wizardSelectedSegment}
+                        disabled={isAnalyzing || (!wizardSelectedSegment && !customSegmentInput.trim())}
                       >
-                        {isAnalyzing ? 'Analyzing…' : 'Next →'}
+                        {isAnalyzing ? 'Finding...' : 'Next →'}
                       </button>
                     </div>
                   </div>
@@ -743,34 +865,70 @@ export default function Page() {
                       </label>
                     </div>
 
-                    <div className="wizard-options">
-                      {aiProblems.map((problem, index) => (
+                    {problemError && (
+                      <div className="wizard-error">
+                        <p>{problemError}</p>
                         <button
-                          key={index}
                           type="button"
-                          className={`wizard-option ${wizardSelectedProblem === problem ? 'is-selected' : ''}`}
-                          onClick={() => setWizardSelectedProblem(problem)}
+                          className="wizard-error__retry"
+                          onClick={handleRetryProblems}
+                          disabled={isAnalyzing}
                         >
-                          <span className="wizard-option__radio" />
-                          <span className="wizard-option__text">{problem}</span>
+                          Retry
                         </button>
-                      ))}
-                      <div className="wizard-option wizard-option--custom">
-                        <span className="wizard-option__radio" />
-                        <input
-                          type="text"
-                          placeholder="Or describe your own problem..."
-                          value={wizardSelectedProblem && !aiProblems.includes(wizardSelectedProblem) ? wizardSelectedProblem : ''}
-                          onChange={(e) => setWizardSelectedProblem(e.target.value)}
-                          onFocus={() => setWizardSelectedProblem('')}
-                        />
                       </div>
-                    </div>
+                    )}
+
+                    {isAnalyzing ? (
+                      <div className="wizard-loading">
+                        <span className="wizard-loading__spinner" />
+                        <span>Preparing research...</span>
+                      </div>
+                    ) : (
+                      <div className="wizard-options">
+                        {aiProblems.map((problem, index) => (
+                          <button
+                            key={index}
+                            type="button"
+                            className={`wizard-option ${wizardSelectedProblem === problem ? 'is-selected' : ''}`}
+                            onClick={() => {
+                              setWizardSelectedProblem(problem)
+                              setCustomProblemInput('')
+                            }}
+                            disabled={isDiscovering}
+                          >
+                            <span className="wizard-option__radio" />
+                            <span className="wizard-option__text">{problem}</span>
+                          </button>
+                        ))}
+                        <div className="wizard-option wizard-option--custom">
+                          <span className="wizard-option__radio" />
+                          <input
+                            type="text"
+                            placeholder="Or describe your own problem..."
+                            value={customProblemInput}
+                            onChange={(e) => {
+                              setCustomProblemInput(e.target.value)
+                              if (e.target.value.trim()) {
+                                setWizardSelectedProblem(null)
+                              }
+                            }}
+                            disabled={isDiscovering}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <div className="wizard-nav">
                       <button
                         type="button"
-                        onClick={() => setWizardStep('segment')}
+                        onClick={() => {
+                          setWizardStep('segment')
+                          setProblemError(null)
+                          setAiProblems([])
+                          setCustomProblemInput('')
+                        }}
+                        disabled={isDiscovering}
                       >
                         ← Back
                       </button>
@@ -778,59 +936,11 @@ export default function Page() {
                         type="button"
                         className="primary"
                         onClick={handleStartResearch}
-                        disabled={isDiscovering}
+                        disabled={isDiscovering || (!wizardSelectedProblem && !customProblemInput.trim())}
                       >
-                        {isDiscovering ? 'Starting…' : 'Start Research'}
+                        {isDiscovering ? 'Starting...' : 'Start Research'}
                       </button>
                     </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="panel__priority-rail">
-                <dl className="signal-meta intake-meta">
-                  <div className="signal-meta__item">
-                    <dt>Segments</dt>
-                    <dd>{metrics.active}</dd>
-                  </div>
-                  <div className="signal-meta__item">
-                    <dt>Ready</dt>
-                    <dd>{metrics.ready}</dd>
-                  </div>
-                  <div className="signal-meta__item">
-                    <dt>In flight</dt>
-                    <dd>{metrics.pending}</dd>
-                  </div>
-                </dl>
-
-                <div className="timeline" aria-label="Discovery flow">
-                  <div className="timeline__step">
-                    <span>1</span>
-                    <div>
-                      <strong>Define the segment</strong>
-                      <small>Customer and problem context.</small>
-                    </div>
-                  </div>
-                  <div className="timeline__step">
-                    <span>2</span>
-                    <div>
-                      <strong>AI finds relevant posts</strong>
-                      <small>Searches Reddit for people with similar problems.</small>
-                    </div>
-                  </div>
-                  <div className="timeline__step">
-                    <span>3</span>
-                    <div>
-                      <strong>Persona synthesized</strong>
-                      <small>Deep analysis of pain points and motivations.</small>
-                    </div>
-                  </div>
-                </div>
-
-                {icpDescription && (
-                  <div className="wizard-preview">
-                    <p className="eyebrow" style={{ marginBottom: 6 }}>Query preview</p>
-                    <p className="wizard-preview__text">{icpDescription}</p>
                   </div>
                 )}
               </div>
@@ -871,8 +981,8 @@ export default function Page() {
             </div>
 
             <div className="segment-grid">
-              {liveSegments.length ? (
-                liveSegments.map((segment) => (
+              {segments.length ? (
+                segments.map((segment) => (
                   <SegmentCard
                     key={segment.id}
                     segment={segment}
