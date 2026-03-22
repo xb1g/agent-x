@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-export type SegmentStatus = 'indexing' | 'reading' | 'synthesizing' | 'ready' | 'failed'
+export type SegmentStatus = 'indexing' | 'reading' | 'synthesizing' | 'ready' | 'failed' | 'paused'
 
 export type SegmentSize = {
   posts_indexed: number
@@ -27,9 +27,17 @@ export type SegmentCardData = {
 type SegmentCardProps = {
   segment: SegmentCardData
   isSelected?: boolean
+  isEditing?: boolean
+  editName?: string
   onSelect?: (segment: SegmentCardData) => void
   onChat?: (segment: SegmentCardData) => void
   onRestart?: (segment: SegmentCardData) => void
+  onPause?: (segment: SegmentCardData) => void
+  onInspect?: (segment: SegmentCardData) => void
+  onStartEdit?: (segment: SegmentCardData) => void
+  onCancelEdit?: () => void
+  onSaveEdit?: (segment: SegmentCardData, newName: string) => void
+  onEditNameChange?: (name: string) => void
 }
 
 function formatCompact(value: number): string {
@@ -53,15 +61,25 @@ function statusLabel(status: SegmentStatus): string {
       return 'Ready'
     case 'failed':
       return 'Failed'
+    case 'paused':
+      return 'Paused'
   }
 }
 
 export function SegmentCard({
   segment,
   isSelected = false,
+  isEditing = false,
+  editName = '',
   onSelect,
   onChat,
   onRestart,
+  onPause,
+  onInspect,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onEditNameChange,
 }: SegmentCardProps) {
   const [showLogs, setShowLogs] = useState(false)
 
@@ -111,28 +129,59 @@ export function SegmentCard({
       </dl>
 
       <div className="segment-card__actions">
-        <button type="button" onClick={() => onSelect?.(segment)}>
-          Inspect segment
-        </button>
-        {segment.status === 'failed' ? (
-          <button type="button" className="primary" onClick={() => onRestart?.(segment)}>
-            Restart
-          </button>
+        {isEditing ? (
+          <>
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => onEditNameChange?.(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') onSaveEdit?.(segment, editName)
+                if (e.key === 'Escape') onCancelEdit?.()
+              }}
+              autoFocus
+              className="segment-card__edit-input"
+              placeholder="Enter persona name"
+            />
+            <button type="button" className="primary" onClick={() => onSaveEdit?.(segment, editName)}>
+              Save
+            </button>
+            <button type="button" onClick={() => onCancelEdit?.()}>
+              Cancel
+            </button>
+          </>
         ) : (
-          <button
-            type="button"
-            className="primary"
-            onClick={() => onChat?.(segment)}
-            disabled={segment.status !== 'ready'}
-            title={segment.status !== 'ready' ? 'Persona not ready yet' : undefined}
-          >
-            Chat with persona
-          </button>
-        )}
-        {segment.logs && segment.logs.length > 0 && (
-          <button type="button" onClick={() => setShowLogs((v) => !v)}>
-            {showLogs ? 'Hide logs' : `Logs (${segment.logs.length})`}
-          </button>
+          <>
+            <button type="button" onClick={() => onInspect?.(segment)} title="Inspect segment">
+              🔍 Inspect
+            </button>
+            <button type="button" onClick={() => onPause?.(segment)} title={segment.status === 'paused' ? 'Resume' : 'Pause'}>
+              {segment.status === 'paused' ? '▶︎ Resume' : '⏸ Pause'}
+            </button>
+            <button type="button" onClick={() => onStartEdit?.(segment)} title="Rename">
+              ✏️ Rename
+            </button>
+            {segment.status === 'failed' ? (
+              <button type="button" className="primary" onClick={() => onRestart?.(segment)}>
+                Restart
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => onChat?.(segment)}
+                disabled={segment.status !== 'ready'}
+                title={segment.status !== 'ready' ? 'Persona not ready yet' : undefined}
+              >
+                Chat with persona
+              </button>
+            )}
+            {segment.logs && segment.logs.length > 0 && (
+              <button type="button" onClick={() => setShowLogs((v) => !v)}>
+                {showLogs ? 'Hide logs' : `Logs (${segment.logs.length})`}
+              </button>
+            )}
+          </>
         )}
       </div>
 

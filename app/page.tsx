@@ -9,6 +9,17 @@ import {
   type SegmentStatus,
 } from './components/SegmentCard'
 import { buildIcpDescription } from '../lib/intake'
+import { suggestSegments, suggestProblems } from '../lib/gemini'
+
+// Prospect type for inspect modal
+type Prospect = {
+  id: string
+  username: string
+  score: number
+  snippet: string
+  subreddit: string
+  post_url: string
+}
 
 type DiscoverResponse = {
   segment_id?: string
@@ -69,6 +80,8 @@ function formatStatus(status: SegmentStatus): string {
       return 'Ready'
     case 'failed':
       return 'Failed'
+    case 'paused':
+      return 'Paused'
   }
 }
 
@@ -118,23 +131,46 @@ export default function Page() {
   const [wizardProblem, setWizardProblem] = useState(
     'pricing confusion, churn, and feature creep',
   )
-  const [segments, setSegments] = useState<SegmentCardData[]>(() => {
-    if (typeof window === 'undefined') return []
-    try {
-      const stored = localStorage.getItem('agentx_segments')
-      return stored ? (JSON.parse(stored) as SegmentCardData[]) : []
-    } catch {
-      return []
-    }
-  })
-  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null
-    return localStorage.getItem('agentx_selected_segment_id') ?? null
-  })
+  const [segments, setSegments] = useState<SegmentCardData[]>([])
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(false)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
+  const [inspectingSegment, setInspectingSegment] = useState<SegmentCardData | null>(null)
+  const [inspectingProspects, setInspectingProspects] = useState<Prospect[]>([])
+  const [isLoadingProspects, setIsLoadingProspects] = useState(false)
+  const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+
+  // Wizard state
+  type WizardStep = 'customer' | 'segment' | 'problem'
+
+  const [wizardStep, setWizardStep] = useState<WizardStep>('customer')
+  const [roughInput, setRoughInput] = useState('')
+  const [wizardSelectedSegment, setWizardSelectedSegment] = useState<string | null>(null)
+  const [wizardSelectedProblem, setWizardSelectedProblem] = useState<string | null>(null)
+  const [aiSegments, setAiSegments] = useState<string[]>([])
+  const [aiProblems, setAiProblems] = useState<string[]>([])
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+
+  // Hydrate from localStorage after mount to avoid SSR mismatch
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('agentx_segments')
+      const storedId = localStorage.getItem('agentx_selected_segment_id')
+      if (stored) {
+        setSegments(JSON.parse(stored) as SegmentCardData[])
+      }
+      if (storedId) {
+        setSelectedSegmentId(storedId)
+      }
+    } catch {
+      // Ignore parse errors
+    }
+    setHydrated(true)
+  }, [])
 
   // Auto-dismiss toast after 5 seconds
   useEffect(() => {
@@ -217,7 +253,7 @@ export default function Page() {
         const nextSegment: SegmentCardData = {
           id: data.id ?? activeRunId,
           icp_description: data.icp_description ?? icpDescription,
-          subreddits: data.subreddits ?? subreddits,
+          subreddits: data.subreddits ?? [],
           status: data.status ?? 'indexing',
           status_message: data.status_message ?? null,
           persona_name: data.persona_name ?? null,
@@ -348,6 +384,113 @@ export default function Page() {
     }
   }
 
+  async function handlePauseSegment(segment: SegmentCardData) {
+    const newStatus = segment.status === 'paused' ? 'reading' : 'paused'
+    try {
+      const response = await fetch(`/api/segment/${segment.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      if (!response.ok) throw new Error('pause failed')
+      // Update local state
+      startTransition(() => {
+        setSegments((current) =>
+          current.map((s) =>
+            s.id === segment.id ? { ...s, status: newStatus as SegmentStatus } : s
+          )
+        )
+      })
+    } catch {
+      setBanner('Could not pause/resume segment — backend unreachable.')
+    }
+  }
+
+  async function handleRenameSegment(segment: SegmentCardData, newName: string) {
+    try {
+      const response = await fetch(`/api/segment/${segment.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persona_name: newName }),
+      })
+      if (!response.ok) throw new Error('rename failed')
+      // Update local state
+      startTransition(() => {
+        setSegments((current) =>
+          current.map((s) =>
+            s.id === segment.id ? { ...s, persona_name: newName } : s
+          )
+        )
+      })
+      setEditingSegmentId(null)
+      setEditName('')
+    } catch {
+      setBanner('Could not rename segment — backend unreachable.')
+    }
+  }
+
+  async function handleInspectSegment(segment: SegmentCardData) {
+    setInspectingSegment(segment)
+    setIsLoadingProspects(true)
+    try {
+      const response = await fetch(`/api/segment/${segment.id}/prospects`)
+      if (!response.ok) throw new Error('fetch prospects failed')
+      const data = await response.json() as { prospects: Prospect[] }
+      setInspectingProspects(data.prospects || [])
+    } catch {
+      setInspectingProspects([])
+    } finally {
+      setIsLoadingProspects(false)
+    }
+  }
+
+  function handleStartEdit(segment: SegmentCardData) {
+    setEditingSegmentId(segment.id)
+    setEditName(segment.persona_name || '')
+  }
+
+  function handleCancelEdit() {
+    setEditingSegmentId(null)
+    setEditName('')
+  }
+
+  // Wizard handlers
+  async function handleAnalyzeCustomer() {
+    if (!roughInput.trim()) return
+    setIsAnalyzing(true)
+    try {
+      const segments = await suggestSegments(roughInput)
+      setAiSegments(segments)
+      setWizardStep('segment')
+    } catch (error) {
+      console.error('Failed to analyze customer:', error)
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  async function handleSelectSegment() {
+    if (!wizardSelectedSegment) return
+    setIsAnalyzing(true)
+    try {
+      const problems = await suggestProblems(wizardSelectedSegment)
+      setAiProblems(problems)
+      setWizardStep('problem')
+    } catch (error) {
+      console.error('Failed to get problems:', error)
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  function handleStartResearch() {
+    const customer = wizardSelectedSegment || roughInput
+    const problem = wizardSelectedProblem || ''
+    setWizardCustomer(customer)
+    setWizardProblem(problem)
+    handleDiscover()
+  }
+
   async function handleRestart(failed: SegmentCardData) {
     try {
       const response = await fetch('/api/discover', {
@@ -397,6 +540,45 @@ export default function Page() {
 
   return (
     <div className="app-shell">
+      <header className="top-tabs" role="banner">
+        <div className="tab-logo">
+          <img src="/logo.png" alt="Logo" />
+        </div>
+        <nav className="top-tabs__nav" aria-label="Workspace tabs">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'research'}
+            aria-controls="panel-research"
+            className={`top-tabs__tab ${activeTab === 'research' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('research')}
+          >
+            Research
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'board'}
+            aria-controls="panel-board"
+            className={`top-tabs__tab ${activeTab === 'board' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('board')}
+          >
+            Board
+            {metrics.pending > 0 && <span className="badge">{metrics.pending}</span>}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'interview'}
+            aria-controls="panel-interview"
+            className={`top-tabs__tab ${activeTab === 'interview' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('interview')}
+          >
+            Interview
+          </button>
+        </nav>
+      </header>
+
       <header className="container shell-header">
         <div className="shell-header__intro">
           <div>
@@ -424,28 +606,7 @@ export default function Page() {
             <span>In flight</span>
             <strong>{metrics.pending}</strong>
           </div>
-
         </div>
-
-        <nav className="tab-nav" aria-label="Workspace tabs">
-          <div className="tab-list" role="tablist" aria-orientation="horizontal">
-            {APP_TABS.map((tab) => (
-              <button
-                key={tab.id}
-                id={`tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                aria-controls={`panel-${tab.id}`}
-                className={`tab-pill ${activeTab === tab.id ? 'is-active' : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <span>{tab.label}</span>
-                <small>{tab.description}</small>
-              </button>
-            ))}
-          </div>
-        </nav>
       </header>
 
       <main className="container tab-panels">
@@ -470,54 +631,160 @@ export default function Page() {
             </div>
 
             <div className="panel__priority-grid">
-              <div>
-                <div className="field wizard-field">
-                  <label htmlFor="wizard-customer">
-                    <span className="wizard-field__num">01</span>
-                    Who is your customer?
-                  </label>
-                  <input
-                    id="wizard-customer"
-                    className="wizard-input"
-                    value={wizardCustomer}
-                    onChange={(e) => setWizardCustomer(e.target.value)}
-                    placeholder="e.g. Bootstrapped SaaS founders"
-                  />
-                </div>
+              <div className="wizard-step">
+                {/* Step 1: Customer Input */}
+                {wizardStep === 'customer' && (
+                  <div className="wizard-step__content">
+                    <div className="field wizard-field">
+                      <label htmlFor="wizard-rough-input">
+                        <span className="wizard-field__num">01</span>
+                        Who is your customer?
+                      </label>
+                      <textarea
+                        id="wizard-rough-input"
+                        className="wizard-input-large"
+                        value={roughInput}
+                        onChange={(e) => setRoughInput(e.target.value)}
+                        placeholder="Describe your customer in plain language... (e.g., 'SaaS founders who are struggling with pricing')"
+                        rows={4}
+                      />
+                    </div>
 
-                <div className="field wizard-field">
-                  <label htmlFor="wizard-problem">
-                    <span className="wizard-field__num">02</span>
-                    What problem are they trying to solve?
-                  </label>
-                  <input
-                    id="wizard-problem"
-                    className="wizard-input"
-                    value={wizardProblem}
-                    onChange={(e) => setWizardProblem(e.target.value)}
-                    placeholder="e.g. pricing confusion, churn, and feature creep"
-                  />
-                </div>
+                    <div className="wizard-examples">
+                      <span className="wizard-examples__label">Examples:</span>
+                      <div className="wizard-examples__chips">
+                        <button
+                          type="button"
+                          className="wizard-example-chip"
+                          onClick={() => setRoughInput('Bootstrapped SaaS founders with $10k-$100k MRR struggling with pricing')}
+                        >
+                          Bootstrapped SaaS founders
+                        </button>
+                        <button
+                          type="button"
+                          className="wizard-example-chip"
+                          onClick={() => setRoughInput('Freelance designers who want to productize their services')}
+                        >
+                          Freelance designers
+                        </button>
+                        <button
+                          type="button"
+                          className="wizard-example-chip"
+                          onClick={() => setRoughInput('Remote team managers dealing with async communication challenges')}
+                        >
+                          Remote team managers
+                        </button>
+                      </div>
+                    </div>
 
-                <div className="actions" style={{ marginTop: 24 }}>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={handleDiscover}
-                    disabled={isDiscovering}
-                  >
-                    {isDiscovering ? 'Searching Reddit…' : 'Research this segment'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWizardCustomer('')
-                      setWizardProblem('')
-                    }}
-                  >
-                    Clear inputs
-                  </button>
-                </div>
+                    <div className="wizard-nav">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={handleAnalyzeCustomer}
+                        disabled={isAnalyzing || !roughInput.trim()}
+                      >
+                        {isAnalyzing ? 'Analyzing…' : 'Next →'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Segment Selection */}
+                {wizardStep === 'segment' && (
+                  <div className="wizard-step__content">
+                    <div className="field wizard-field">
+                      <label>
+                        <span className="wizard-field__num">02</span>
+                        Which segment fits best?
+                      </label>
+                    </div>
+
+                    <div className="wizard-options">
+                      {aiSegments.map((segment, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          className={`wizard-option ${wizardSelectedSegment === segment ? 'is-selected' : ''}`}
+                          onClick={() => setWizardSelectedSegment(segment)}
+                        >
+                          <span className="wizard-option__radio" />
+                          <span className="wizard-option__text">{segment}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="wizard-nav">
+                      <button
+                        type="button"
+                        onClick={() => setWizardStep('customer')}
+                      >
+                        ← Back
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={handleSelectSegment}
+                        disabled={isAnalyzing || !wizardSelectedSegment}
+                      >
+                        {isAnalyzing ? 'Analyzing…' : 'Next →'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 3: Problem Selection */}
+                {wizardStep === 'problem' && (
+                  <div className="wizard-step__content">
+                    <div className="field wizard-field">
+                      <label>
+                        <span className="wizard-field__num">03</span>
+                        What problem are they trying to solve?
+                      </label>
+                    </div>
+
+                    <div className="wizard-options">
+                      {aiProblems.map((problem, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          className={`wizard-option ${wizardSelectedProblem === problem ? 'is-selected' : ''}`}
+                          onClick={() => setWizardSelectedProblem(problem)}
+                        >
+                          <span className="wizard-option__radio" />
+                          <span className="wizard-option__text">{problem}</span>
+                        </button>
+                      ))}
+                      <div className="wizard-option wizard-option--custom">
+                        <span className="wizard-option__radio" />
+                        <input
+                          type="text"
+                          placeholder="Or describe your own problem..."
+                          value={wizardSelectedProblem && !aiProblems.includes(wizardSelectedProblem) ? wizardSelectedProblem : ''}
+                          onChange={(e) => setWizardSelectedProblem(e.target.value)}
+                          onFocus={() => setWizardSelectedProblem('')}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="wizard-nav">
+                      <button
+                        type="button"
+                        onClick={() => setWizardStep('segment')}
+                      >
+                        ← Back
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={handleStartResearch}
+                        disabled={isDiscovering}
+                      >
+                        {isDiscovering ? 'Starting…' : 'Start Research'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="panel__priority-rail">
@@ -610,12 +877,20 @@ export default function Page() {
                     key={segment.id}
                     segment={segment}
                     isSelected={segment.id === selectedSegmentId}
+                    isEditing={editingSegmentId === segment.id}
+                    editName={editName}
                     onSelect={(next) => setSelectedSegmentId(next.id)}
                     onChat={(next) => {
                       setSelectedSegmentId(next.id)
                       setActiveTab('interview')
                     }}
                     onRestart={(next) => void handleRestart(next)}
+                    onPause={(next) => void handlePauseSegment(next)}
+                    onInspect={(next) => void handleInspectSegment(next)}
+                    onStartEdit={(next) => handleStartEdit(next)}
+                    onCancelEdit={handleCancelEdit}
+                    onSaveEdit={(next, name) => void handleRenameSegment(next, name)}
+                    onEditNameChange={setEditName}
                   />
                 ))
               ) : (
@@ -672,6 +947,106 @@ export default function Page() {
           </button>
         </aside>
       ) : null}
+
+      {/* Inspect Modal */}
+      {inspectingSegment && (
+        <div
+          className="inspect-modal"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setInspectingSegment(null)
+          }}
+        >
+          <div className="inspect-modal__content">
+            <div className="inspect-modal__header">
+              <div>
+                <h2>{inspectingSegment.persona_name ?? 'Unnamed Persona'}</h2>
+                <p className="inspect-modal__subheader">{inspectingSegment.icp_description}</p>
+              </div>
+              <button
+                type="button"
+                className="inspect-modal__close"
+                onClick={() => setInspectingSegment(null)}
+                aria-label="Close modal"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="inspect-modal__body">
+              {/* Overview Section */}
+              <section className="inspect-modal__section">
+                <h3>Overview</h3>
+                <div className="inspect-modal__stats">
+                  <div className="inspect-modal__stat">
+                    <dt>Posts Analyzed</dt>
+                    <dd>{inspectingSegment.segment_size?.posts_indexed ?? 0}</dd>
+                  </div>
+                  <div className="inspect-modal__stat">
+                    <dt>High-Relevance</dt>
+                    <dd>{inspectingSegment.segment_size?.fragments_collected ?? 0}</dd>
+                  </div>
+                  <div className="inspect-modal__stat">
+                    <dt>Subreddits</dt>
+                    <dd>{inspectingSegment.subreddits.length}</dd>
+                  </div>
+                </div>
+                {inspectingSegment.subreddits.length > 0 && (
+                  <div className="inspect-modal__subreddits">
+                    {inspectingSegment.subreddits.map((sub) => (
+                      <span key={sub} className="inspect-modal__subreddit">
+                        r/{sub}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* Prospects Section */}
+              <section className="inspect-modal__section">
+                <h3>Prospects</h3>
+                {isLoadingProspects ? (
+                  <div className="inspect-modal__loading">Loading prospects...</div>
+                ) : inspectingProspects.length === 0 ? (
+                  <div className="inspect-modal__empty">No prospects found.</div>
+                ) : (
+                  <div className="inspect-modal__prospects">
+                    {inspectingProspects.map((prospect) => (
+                      <div key={prospect.id} className="prospect-card">
+                        <div className="prospect-card__header">
+                          <span className="prospect-card__username">u/{prospect.username}</span>
+                          <span className="prospect-card__score">{prospect.score}% match</span>
+                        </div>
+                        <p className="prospect-card__snippet">{prospect.snippet}</p>
+                        <div className="prospect-card__meta">
+                          <span className="prospect-card__subreddit">r/{prospect.subreddit}</span>
+                        </div>
+                        <div className="prospect-card__actions">
+                          <a
+                            href={prospect.post_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="prospect-card__link"
+                          >
+                            View Post →
+                          </a>
+                          <a
+                            href={`https://reddit.com/user/${prospect.username}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="prospect-card__link prospect-card__link--secondary"
+                          >
+                            Reddit Profile →
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

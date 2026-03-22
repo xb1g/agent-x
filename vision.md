@@ -1,140 +1,397 @@
-# AGENT-X — Hackathon Vision Document
+# AGENT-X — Customer Discovery Engine
 
-**Date:** March 21, 2026 | **Event:** Vercel x Gemini Hackathon
+**The best engine to find customers to interview.**
 
-## The Goal
+---
 
-**Build a customer discovery platform that lets founders interview their target customer before they exist.**
+## The Problem
 
-A founder describes who they're building for. Agent-X mines Reddit for real pain signals, constructs a composite AI persona grounded in verbatim user language, and lets the founder have a live conversation with that persona — all within minutes, not weeks of interviews.
+Founders build products nobody wants because customer discovery is expensive:
+- 3+ weeks of cold outreach
+- Awkward interviews with the wrong people
+- No systematic way to find *high-intent* prospects
 
-## The Reason (Why This, Why Now)
+## The Solution
 
-The #1 killer of startups is building something nobody wants. Customer discovery — talking to real users, finding their real fears, validating ideas — takes weeks of cold outreach, awkward interviews, and qualitative synthesis.
+Agent-X mines Reddit for real pain signals, identifies high-value prospects, and lets you interview an AI persona synthesized from real user language — all in minutes.
 
-Founders skip it. Not because they're lazy, but because it's expensive in time and social capital.
+**We don't just find insights. We find the people behind them.**
 
-Three forces make this the right moment:
+---
 
-1. **Reddit is the largest unfiltered complaint database on the internet.** Real users venting real problems, unprompted, in authentic language. It's never been systematically mined for startup validation.
-2. **Gemini's multimodal + embedding capabilities** make it possible to not just *summarize* that data, but to construct a psychologically coherent persona that *reasons* from it.
-3. **Vercel's agent stack** (waitUntil, background functions, AI SDK) means we can run parallel deep-reading subagents without managing infrastructure — the pipeline just works.
+## Product Phases
 
-The result: what used to take a founder 3 weeks now takes 3 minutes.
+### Phase 1: Research (Target Discovery)
 
-## The Possibility (What We Built)
+A guided wizard that helps founders define their ICP with AI assistance.
 
 ```
-FOUNDER
-  │  "B2B SaaS founders struggling with churn"
-  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  NEXT.JS on VERCEL                                              │
-│                                                                 │
-│  Step 1: ICP → XPOZ suggests relevant subreddits               │
-│  Step 2: Founder confirms subreddits                           │
-│  Step 3: Coordinator kicks off background pipeline             │
-│                                                                 │
-│  PHASE 1 (Fast Indexer, no AI)                                  │
-│   → Parallel XPOZ searches per subreddit                       │
-│   → Pain score heuristic (complaints, depth, keywords)         │
-│   → Top 20 posts per subreddit selected                        │
-│                                                                 │
-│  PHASE 2 (Deep Reader SubAgents, parallel)                     │
-│   → Full post + comments fetched per post                      │
-│   → Chunk → Embed (Gemini text-embedding-004, 768-dim)         │
-│   → Upsert to pgvector (HNSW index, Supabase)                  │
-│   → Psychoanalyze (Gemini flash-lite) → PersonaFragment        │
-│                                                                 │
-│  SYNTHESIS                                                      │
-│   → Merge PersonaFragments → Gemini Pro writes soul_document   │
-│   → soul_document = character bible, ~800 tokens               │
-│                                                                 │
-│  CHAT / INTERVIEW                                               │
-│   → Embed founder question → retrieve 5 closest evidence chunks│
-│   → soul_document + evidence → streamText (Gemini Pro)         │
-│   → Founder talks to "Alex" — a composite persona              │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-  SUPABASE (segments · posts · post_embeddings pgvector)
-  Persists across sessions — re-research adds more signal
+┌─────────────────────────────────────────────────────────────┐
+│  [logo]  AGENT-X                              [Research ▾] │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  🎯 Who are you building for?                       │   │
+│  │                                                     │   │
+│  │  Start with a rough idea. I'll help you refine it. │   │
+│  │                                                     │   │
+│  │  [I'm building for __________________]             │   │
+│  │                                                     │   │
+│  │  Examples:                                          │   │
+│  │  • "SaaS founders"                                  │   │
+│  │  • "People learning to code"                        │   │
+│  │  • "Small business owners"                          │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  💡 AI Refinement                                   │   │
+│  │                                                     │   │
+│  │  Based on "SaaS founders", here are common          │   │
+│  │  segments I can help you target:                    │   │
+│  │                                                     │   │
+│  │  ○ Early-stage founders (pre-revenue)               │   │
+│  │  ○ Bootstrapped founders (solo/small team)          │   │
+│  │  ○ B2B SaaS founders (enterprise sales)             │   │
+│  │  ○ Something else...                                │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  😰 What problem do they have?                      │   │
+│  │                                                     │   │
+│  │  [They struggle with _______________]              │   │
+│  │                                                     │   │
+│  │  AI suggestions based on your segment:              │   │
+│  │  • Pricing strategy                                 │   │
+│  │  • Customer churn                                   │   │
+│  │  • Feature prioritization                           │   │
+│  │  • Finding product-market fit                       │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  [← Back]                          [Start Research →]      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Status lifecycle:** `indexing → reading → synthesizing → ready | failed`
+**Wizard Flow:**
+1. **Rough input** → AI suggests refinements
+2. **Pick a segment** → AI suggests common problems
+3. **Confirm problem** → AI generates search strategy
+4. **Start research** → Background pipeline begins
 
-**Tech Stack:**
+**Mobile-first design:**
+- Top tab bar: Research | Board | Interview
+- Full-width cards
+- Touch-friendly inputs
+- Collapsible sections
 
-- Next.js 15 App Router + Vercel (waitUntil, maxDuration: 300)
-- Vercel AI SDK + `@ai-sdk/google` (Gemini 3.1 Pro + Flash Lite)
-- XPOZ SDK — Reddit data access layer
-- Supabase Postgres + pgvector (HNSW index)
-- Zod validation, html-escaper (prompt injection defense)
+---
 
-## The Vision
+### Phase 2: Board (Discovery Dashboard)
 
-> "The best founders deeply understand their customers. Agent-X makes that depth available to every founder, not just the ones with 500 LinkedIn connections."
+Monitor and manage research segments with deep visibility.
 
-**12 months from now**, Agent-X is the first tool a founder opens before writing a single line of code. They describe their ICP once. The system continuously monitors Reddit for new signals, evolving the persona over time. When the founder ships a feature, they interview Alex first. When churn spikes, they ask Alex why.
+```
+┌─────────────────────────────────────────────────────────────┐
+│  [Research] [Board] [Interview]                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Active Segments                              [+ New]       │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Alex — Bootstrapped SaaS Founders          [▶︎ ⏸]  │   │
+│  │                                                     │   │
+│  │  Status: ● Reading posts (47/120)                   │   │
+│  │  Started: 2 min ago                                 │   │
+│  │                                                     │   │
+│  │  ┌─────────────────────────────────────────────┐   │   │
+│  │  │  📊 Live Metrics                             │   │   │
+│  │  │                                             │   │   │
+│  │  │  Posts found:     847                       │   │   │
+│  │  │  High-relevance:  23                        │   │   │
+│  │  │  Fragments:       12                        │   │   │
+│  │  │  Subreddits:      r/SaaS, r/startups, +3   │   │   │
+│  │  └─────────────────────────────────────────────┘   │   │
+│  │                                                     │   │
+│  │  [Inspect] [Rename] [Delete]                        │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Jordan — E-commerce Store Owners           [Ready] │   │
+│  │                                                     │   │
+│  │  Status: ✓ Ready to interview                      │   │
+│  │  Posts analyzed: 234  |  Fragments: 18             │   │
+│  │                                                     │   │
+│  │  [Interview] [Inspect] [Rename]                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-The persona doesn't just answer — it *challenges*. "Why would I pay for that when I already have a spreadsheet?" That kind of friction, delivered instantly, saves founders from building features their users don't actually want.
+**Segment Controls:**
+- **Pause/Play** — Stop or resume post discovery
+- **Rename** — Change persona name
+- **Inspect** — Deep dive into data
 
-**The 10x version:** Agent-X isn't just a chat interface. It's a living customer intelligence layer that every tool in the founder's stack can query — Notion docs written in the customer's voice, PR templates that speak to the persona's fears, pitch decks stress-tested against objections Alex would actually raise.
+**Inspect Modal:**
 
-## Hackathon Scope
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ← Alex — Bootstrapped SaaS Founders                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  📊 Overview                                                │
+│  ─────────────────────────────────────────────────────────  │
+│  Posts analyzed:      234                                   │
+│  High-relevance:      23 (scored 8+)                        │
+│  Fragments extracted: 18                                    │
+│  Subreddits:          r/SaaS, r/startups, r/indiehackers   │
+│                                                             │
+│  🎯 High-Value Prospects                                    │
+│  ─────────────────────────────────────────────────────────  │
+│  People actively expressing this pain, ready to talk:       │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  u/saas_founder_mike                    Score: 9.2  │   │
+│  │                                                     │   │
+│  │  "I've been running my SaaS for 2 years and        │   │
+│  │   churn is killing me. I've tried everything..."   │   │
+│  │                                                     │   │
+│  │  📍 r/SaaS • 847 upvotes • 124 comments            │   │
+│  │                                                     │   │
+│  │  [View Post] [Reddit Profile] [Find Contact]       │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  u/bootstrapped_bob                    Score: 8.7   │   │
+│  │                                                     │   │
+│  │  "Looking for advice on pricing. My customers      │   │
+│  │   keep saying it's too expensive but..."           │   │
+│  │                                                     │   │
+│  │  📍 r/indiehackers • 234 upvotes • 67 comments     │   │
+│  │                                                     │   │
+│  │  [View Post] [Reddit Profile] [Find Contact]       │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  💬 High-Value Commenters                                   │
+│  ─────────────────────────────────────────────────────────  │
+│  People who engaged deeply with relevant posts:             │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  u/churn_analyst                       Score: 8.1   │   │
+│  │                                                     │   │
+│  │  Comment: "I've reduced churn by 40% using this    │   │
+│  │  framework..." (234 upvotes)                        │   │
+│  │                                                     │   │
+│  │  [View Comment] [Reddit Profile] [Find Contact]    │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  [Export Contacts] [Continue Research]                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-This project maps to **Statement Three: AI Applications** (primary) and **Statement One: Chat-Based Agents** (the chat interview component).
+**Find Contact Feature:**
+- Searches for LinkedIn, Twitter, personal website
+- Shows available contact methods
+- One-click outreach templates
 
-### What's Live and Demoed Today
+---
 
-| Feature | Status |
-| --- | --- |
-| ICP input → XPOZ subreddit suggestions | Done |
-| Two-phase background pipeline (Phase 1 + Phase 2) | Done |
-| Gemini psychoanalysis per post → PersonaFragment | Done |
-| Gemini Pro synthesis → soul_document | Done |
-| pgvector HNSW retrieval at chat time | Done |
-| Streaming persona chat (Gemini Pro + RAG) | Done |
-| Polling UI (indexing → reading → synthesizing → ready) | Done |
-| Supabase persistence (cross-session) | Done |
-| Prompt injection defense (html-escaper) | Done |
-| XPOZ SDK integration (replaces raw Reddit API) | Done |
+### Phase 3: Interview (Persona Chat)
 
-### What the Demo Shows (3 minutes)
+Talk to the synthesized persona.
 
-1. Type an ICP: *"B2B SaaS founders dealing with churn"*
-2. XPOZ suggests subreddits → confirm 3
-3. Watch the live status bar: indexing → reading → synthesizing → ready
-4. Segment card appears: "Alex — 60 posts, 2,300 comments analysed"
-5. Click Chat → ask: *"What's the #1 thing that makes you consider cancelling a SaaS tool?"*
-6. Alex responds in character, citing real language from Reddit posts
-7. Follow-up: *"Would you pay $49/month for a churn prediction tool?"* — Alex pushes back
+```
+┌─────────────────────────────────────────────────────────────┐
+│  [Research] [Board] [Interview]                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  👤 Alex                                            │   │
+│  │  Bootstrapped SaaS Founder                          │   │
+│  │                                                     │   │
+│  │  "I've been running my SaaS for 3 years. Churn      │   │
+│  │   is my biggest headache — I lose 8% of customers   │   │
+│  │   every month and I don't know why."                │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  💬 Chat                                            │   │
+│  │                                                     │   │
+│  │  You: What's the #1 thing that makes you            │   │
+│  │  consider cancelling a SaaS tool?                   │   │
+│  │                                                     │   │
+│  │  Alex: Honestly? When I realize I'm paying for      │   │
+│  │  features I never use. I had this analytics tool    │   │
+│  │  that cost $99/mo and I only looked at it once      │   │
+│  │  a month. Cancelled after 6 months.                 │   │
+│  │                                                     │   │
+│  │  [Evidence: 3 Reddit posts]                         │   │
+│  │                                                     │   │
+│  │  You: Would you pay $49/mo for a churn prediction   │   │
+│  │  tool?                                              │   │
+│  │                                                     │   │
+│  │  Alex: Hmm, maybe? But here's the thing — I'm       │   │
+│  │  already drowning in tools. What would make me      │   │
+│  │  pay is if you could tell me *who* is about to      │   │
+│  │  churn and *why*. Not just a prediction score.      │   │
+│  │                                                     │   │
+│  │  [Evidence: 2 Reddit posts, 1 comment]              │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  [Type a message...]                              [Send →]  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### Judging Criteria Alignment
+---
 
-| Criterion | Our Angle |
-| --- | --- |
-| Impact Potential (20%) | Customer discovery is a $0 → massive problem. Every startup needs this. The knowledge base persists and compounds. |
-| Live Demo (45%) | The pipeline runs live. Real Reddit data, real Gemini inference, real streaming chat. The persona feels alive — not a chatbot, a character. |
-| Creativity & Originality (35%) | Nobody has built "talk to your customer before they exist." The two-phase subagent architecture, soul_document + pgvector hybrid, and psychoanalysis-first approach are all novel. |
+## Technical Architecture
 
-## Not in Scope (Hackathon MVP)
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FRONTEND (Next.js 16)                                      │
+│                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │  Research   │ │   Board     │ │  Interview  │           │
+│  │  (Wizard)   │ │  (Dashboard)│ │   (Chat)    │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+│                                                             │
+│  Mobile-first • Top tab navigation • Touch-optimized        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  API LAYER                                                  │
+│                                                             │
+│  POST /api/discover     → Start research pipeline           │
+│  POST /api/segment/:id  → Pause/play/rename                 │
+│  GET  /api/segment/:id  → Get segment details + prospects   │
+│  POST /api/chat         → Stream persona responses          │
+│  POST /api/find-contact → Find contact info for user        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  DISCOVERY PIPELINE                                         │
+│                                                             │
+│  1. ICP Analysis (Gemini Flash Lite)                        │
+│     → Generate search queries                               │
+│     → Score post relevance                                  │
+│                                                             │
+│  2. Post Discovery (XPOZ)                                   │
+│     → Search Reddit with AI-generated queries               │
+│     → Fetch posts + comments                                │
+│     → Identify high-value authors/commenters                │
+│                                                             │
+│  3. Deep Analysis (Gemini Flash Lite)                       │
+│     → Psychoanalyze → PersonaFragment                       │
+│     → Chunk → Embed (pgvector)                              │
+│                                                             │
+│  4. Synthesis (Gemini Pro)                                  │
+│     → Merge fragments → soul_document                       │
+│     → Generate persona profile                              │
+│                                                             │
+│  5. Prospect Scoring                                        │
+│     → Score authors by relevance + engagement               │
+│     → Find contact info (LinkedIn, Twitter, etc.)           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  DATA LAYER (Supabase)                                      │
+│                                                             │
+│  segments          → Research sessions                      │
+│  posts             → Discovered posts                       │
+│  post_embeddings   → pgvector chunks                        │
+│  prospects         → High-value users to contact            │
+│  contact_info      → Found contact methods                  │
+└─────────────────────────────────────────────────────────────┘
+```
 
-These are deliberate deferrals, not forgotten ideas:
+---
 
-| Deferred | Why |
-| --- | --- |
-| X/Twitter, LinkedIn, GitHub sources | Reddit provides enough signal for a compelling demo |
-| Multi-tenant / workspace auth | Single workspace sufficient for hackathon |
-| Individual user simulation | Composite persona is more statistically valid anyway |
-| Admin dashboard | Not needed for demo |
-| Longitudinal tracking (persona evolution over time) | Phase 2 product feature |
-| CRM export (Notion, HubSpot) | Clear next integration |
-| Rate limiting (Upstash) | In-memory guard sufficient for hackathon |
-| Multi-round automated interview flows | Follow-up feature |
+## Roadmap
+
+### v0.2 — Mobile + Wizard (Next)
+
+**UX/UI:**
+- [ ] Mobile-first responsive design
+- [ ] Top tab bar navigation (Research | Board | Interview)
+- [ ] Logo in header
+- [ ] Research wizard with AI-assisted ICP refinement
+- [ ] Touch-friendly inputs and buttons
+
+**Research Wizard:**
+- [ ] Step 1: Rough customer input → AI suggests segments
+- [ ] Step 2: Pick segment → AI suggests problems
+- [ ] Step 3: Confirm problem → Start research
+- [ ] Progress indicator
+- [ ] Back/forward navigation
+
+### v0.3 — Board Improvements
+
+**Segment Management:**
+- [ ] Pause/Play research
+- [ ] Rename persona
+- [ ] Delete segment
+- [ ] Duplicate segment with different parameters
+
+**Inspect Modal:**
+- [ ] Overview metrics
+- [ ] High-value prospects list
+- [ ] Post URLs (clickable)
+- [ ] Author Reddit profiles (clickable)
+- [ ] High-value commenters
+- [ ] Comment links
+
+**Data Depth:**
+- [ ] Relevance scores per post
+- [ ] Pain scores per post
+- [ ] Engagement metrics
+- [ ] Subreddit breakdown
+
+### v0.4 — Contact Discovery
+
+**Find Contacts:**
+- [ ] LinkedIn profile search
+- [ ] Twitter/X profile search
+- [ ] Personal website detection
+- [ ] Email finding (via Hunter.io or similar)
+- [ ] Contact quality score
+
+**Outreach:**
+- [ ] One-click outreach templates
+- [ ] Personalized based on their post
+- [ ] Export to CSV
+
+### v0.5 — Interview Enhancements
+
+**Chat Improvements:**
+- [ ] Evidence citations (click to view source)
+- [ ] Persona customization
+- [ ] Interview templates
+- [ ] Export conversation
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | Next.js 16, React 19, Tailwind CSS |
+| Backend | Next.js API Routes, Vercel Functions |
+| AI | Gemini 3.1 Pro + Flash Lite, Vercel AI SDK |
+| Data | Supabase Postgres + pgvector |
+| Reddit | XPOZ SDK |
+| Contact Finding | Hunter.io / Clearbit (planned) |
+
+---
 
 ## The One-Sentence Pitch
 
-**Agent-X lets founders interview their target customer in 3 minutes — powered by Gemini subagents that mine Reddit for real pain signals and synthesize them into an AI persona you can actually talk to.**
+**Agent-X finds the exact people you should interview — not just insights, but the humans behind them.**
 
-*Built at Vercel x Gemini Hackathon, March 21, 2026. Stack: Next.js · Vercel AI SDK · Gemini 3.1 · XPOZ · Supabase pgvector.*
+---
+
+*Built at Vercel x Gemini Hackathon, March 21, 2026.*

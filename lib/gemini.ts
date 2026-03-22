@@ -161,8 +161,9 @@ Fragments:
 ${escape(JSON.stringify(fragments, null, 2))}`
 
   try {
+    // Use FLASH_MODEL instead of PRO_MODEL to avoid quota issues
     const { text } = await generateText({
-      model: google(PRO_MODEL),
+      model: google(FLASH_MODEL),
       prompt,
     })
 
@@ -229,4 +230,44 @@ export function normalizeSuggestedSubreddits(raw: string): string[] {
 
 function stripCodeFences(text: string): string {
   return text.replace(/```json\s*|\s*```/g, '').trim()
+}
+
+export async function suggestSegments(roughInput: string): Promise<string[]> {
+  try {
+    const { text } = await generateText({
+      model: google(FLASH_MODEL),
+      prompt: `Given this rough customer description: "${escape(roughInput)}"
+
+Return a JSON array of 4 specific, actionable customer segments that would be good targets for a product or service. Be specific and concrete (e.g., instead of "small businesses", use "SaaS founders with $10k-$100k MRR").
+
+Output only the JSON array of strings.`,
+    })
+
+    return JSON.parse(stripCodeFences(text)) as string[]
+  } catch (error) {
+    console.warn('[gemini] suggestSegments error:', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
+export async function suggestProblems(segment: string): Promise<string[]> {
+  try {
+    const { text } = await generateText({
+      model: google(FLASH_MODEL),
+      prompt: `Given this customer segment: "${escape(segment)}"
+
+Return a JSON array of 4 common problems or pain points this segment faces in their work or daily life. Focus on real, specific problems they would pay to solve.
+
+Output only the JSON array of strings.`,
+    })
+
+    return JSON.parse(stripCodeFences(text)) as string[]
+  } catch (error) {
+    console.warn('[gemini] suggestProblems error:', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
 }
