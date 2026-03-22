@@ -29,6 +29,7 @@ type SegmentCardProps = {
   isSelected?: boolean
   onSelect?: (segment: SegmentCardData) => void
   onChat?: (segment: SegmentCardData) => void
+  onRestart?: (segment: SegmentCardData) => void
 }
 
 function formatCompact(value: number): string {
@@ -60,6 +61,7 @@ export function SegmentCard({
   isSelected = false,
   onSelect,
   onChat,
+  onRestart,
 }: SegmentCardProps) {
   const [showLogs, setShowLogs] = useState(false)
 
@@ -112,15 +114,21 @@ export function SegmentCard({
         <button type="button" onClick={() => onSelect?.(segment)}>
           Inspect segment
         </button>
-        <button
-          type="button"
-          className="primary"
-          onClick={() => onChat?.(segment)}
-          disabled={segment.status !== 'ready'}
-          title={segment.status !== 'ready' ? 'Persona not ready yet' : undefined}
-        >
-          Chat with persona
-        </button>
+        {segment.status === 'failed' ? (
+          <button type="button" className="primary" onClick={() => onRestart?.(segment)}>
+            Restart
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary"
+            onClick={() => onChat?.(segment)}
+            disabled={segment.status !== 'ready'}
+            title={segment.status !== 'ready' ? 'Persona not ready yet' : undefined}
+          >
+            Chat with persona
+          </button>
+        )}
         {segment.logs && segment.logs.length > 0 && (
           <button type="button" onClick={() => setShowLogs((v) => !v)}>
             {showLogs ? 'Hide logs' : `Logs (${segment.logs.length})`}

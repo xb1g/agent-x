@@ -156,6 +156,13 @@ export default function Page() {
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
 
+  // Auto-dismiss toast after 5 seconds
+  useEffect(() => {
+    if (!banner) return
+    const timeout = setTimeout(() => setBanner(null), 5000)
+    return () => clearTimeout(timeout)
+  }, [banner])
+
   const icpDescription = useMemo(
     () => buildIcpDescription(wizardCustomer, wizardProblem),
     [wizardCustomer, wizardProblem],
@@ -468,6 +475,43 @@ export default function Page() {
     }
   }
 
+  async function handleRestart(failed: SegmentCardData) {
+    try {
+      const response = await fetch('/api/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          icp_description: failed.icp_description,
+          subreddits: failed.subreddits,
+        }),
+      })
+      if (!response.ok) throw new Error('restart failed')
+      const payload = (await response.json()) as { segment_id?: string; status?: SegmentStatus }
+      const newId = payload.segment_id ?? uid('segment')
+      startTransition(() => {
+        // Replace the failed card with the new run in-place
+        setSegments((current) =>
+          current.map((s) =>
+            s.id === failed.id
+              ? {
+                  ...failed,
+                  id: newId,
+                  status: payload.status ?? 'indexing',
+                  status_message: 'Restarted.',
+                  pain_signals: ['Restarting discovery run'],
+                  logs: [],
+                }
+              : s
+          )
+        )
+        setSelectedSegmentId(newId)
+      })
+      setActiveRunId(newId)
+      setBanner('Discovery restarted.')
+    } catch {
+      setBanner('Could not restart — backend unreachable.')
+    }
+  }
 
   const liveSegments = segments
   const boardLabel = liveSegments.length > 0 ? 'Live slate' : 'Empty slate'
@@ -773,6 +817,7 @@ export default function Page() {
                       setSelectedSegmentId(next.id)
                       setActiveTab('interview')
                     }}
+                    onRestart={(next) => void handleRestart(next)}
                   />
                 ))
               ) : (
@@ -801,8 +846,18 @@ export default function Page() {
 
       {banner ? (
         <aside className="toast" role="status" aria-live="polite">
-          <strong>Board update</strong>
-          {banner}
+          <div className="toast__content">
+            <strong>Board update</strong>
+            {banner}
+          </div>
+          <button
+            type="button"
+            className="toast__close"
+            onClick={() => setBanner(null)}
+            aria-label="Dismiss notification"
+          >
+            ×
+          </button>
         </aside>
       ) : null}
     </div>
