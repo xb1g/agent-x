@@ -576,12 +576,25 @@ export default function Page() {
   }
 
   async function handleStartResearch() {
+    // Guard against double-start: prevent multiple clicks while discovering
+    if (isDiscovering) {
+      logClient('discover_double_start_blocked')
+      return
+    }
+
     // Get current values directly from wizard state
     const customer = wizardSelectedSegment || customSegmentInput.trim() || roughInput
     const problem = wizardSelectedProblem || customProblemInput.trim() || ''
+
+    // Compute ICP directly from wizard values to avoid stale state from useMemo
+    const icp = buildIcpDescription(customer, problem)
+
+    // Update state for UI consistency (these are async and won't affect the ICP we pass)
     setWizardCustomer(customer)
     setWizardProblem(problem)
-    await handleDiscover(buildIcpDescription(customer, problem))
+
+    // Pass ICP directly to avoid stale memo value
+    await handleDiscover(icp)
   }
 
   function resetWizardState() {
