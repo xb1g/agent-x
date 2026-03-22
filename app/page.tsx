@@ -157,7 +157,7 @@ export default function Page() {
   const [editName, setEditName] = useState('')
 
   // Wizard state
-  type WizardStep = 'customer' | 'segment' | 'problem'
+  type WizardStep = 'customer' | 'segment' | 'problem' | 'confirm'
 
   const [wizardStep, setWizardStep] = useState<WizardStep>('customer')
   const [roughInput, setRoughInput] = useState('')
@@ -312,8 +312,9 @@ export default function Page() {
     }
   }, [activeRunId, icpDescription])
 
-  async function handleDiscover() {
-    const trimmed = icpDescription
+  async function handleDiscover(icpDescriptionOverride?: string) {
+    // Use provided ICP or fall back to computed value
+    const trimmed = icpDescriptionOverride ?? icpDescription
     if (!trimmed) return
 
     logClient('discover_attempt', {
@@ -381,6 +382,8 @@ export default function Page() {
       })
 
       setBanner('Discovery started. Finding relevant posts...')
+      // Reset wizard after successful discovery start
+      resetWizardState()
     } catch {
       logClient('discover_failed')
       setBanner('Discovery could not reach the backend, but the intake panel still works locally.')
@@ -547,6 +550,8 @@ export default function Page() {
       if (problems.length === 0) {
         setBanner('Couldn\'t find common problems. Try selecting a different segment.')
         setAiProblems([])
+        // Still advance to problem step even if no problems found (custom input allowed)
+        setWizardStep('problem')
         return
       }
       setAiProblems(problems)
@@ -561,12 +566,36 @@ export default function Page() {
     }
   }
 
-  function handleStartResearch() {
+  function handleAdvanceToConfirm() {
+    // Set wizard customer/problem before advancing to confirm
     const customer = wizardSelectedSegment || customSegmentInput.trim() || roughInput
     const problem = wizardSelectedProblem || customProblemInput.trim() || ''
     setWizardCustomer(customer)
     setWizardProblem(problem)
-    handleDiscover()
+    setWizardStep('confirm')
+  }
+
+  async function handleStartResearch() {
+    // Get current values directly from wizard state
+    const customer = wizardSelectedSegment || customSegmentInput.trim() || roughInput
+    const problem = wizardSelectedProblem || customProblemInput.trim() || ''
+    setWizardCustomer(customer)
+    setWizardProblem(problem)
+    await handleDiscover(buildIcpDescription(customer, problem))
+  }
+
+  function resetWizardState() {
+    // Reset wizard to initial state after completing research
+    setWizardStep('customer')
+    setRoughInput('')
+    setWizardSelectedSegment(null)
+    setWizardSelectedProblem(null)
+    setAiSegments([])
+    setAiProblems([])
+    setCustomSegmentInput('')
+    setCustomProblemInput('')
+    setSegmentError(null)
+    setProblemError(null)
   }
 
   function handleRetrySegments() {
@@ -835,9 +864,8 @@ export default function Page() {
                         type="button"
                         onClick={() => {
                           setWizardStep('customer')
+                          // Preserve segment selections when going back
                           setSegmentError(null)
-                          setAiSegments([])
-                          setCustomSegmentInput('')
                         }}
                         disabled={isAnalyzing}
                       >
@@ -924,9 +952,58 @@ export default function Page() {
                         type="button"
                         onClick={() => {
                           setWizardStep('segment')
+                          // Preserve problem selections when going back
                           setProblemError(null)
-                          setAiProblems([])
-                          setCustomProblemInput('')
+                        }}
+                        disabled={isDiscovering}
+                      >
+                        ← Back
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={handleAdvanceToConfirm}
+                        disabled={isDiscovering || (!wizardSelectedProblem && !customProblemInput.trim())}
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 4: Confirmation */}
+                {wizardStep === 'confirm' && (
+                  <div className="wizard-step__content">
+                    <div className="field wizard-field">
+                      <label>
+                        <span className="wizard-field__num">04</span>
+                        Confirm and start research
+                      </label>
+                    </div>
+
+                    <div className="wizard-confirmation">
+                      <div className="wizard-confirmation__section">
+                        <h4>Segment</h4>
+                        <p>{wizardSelectedSegment || customSegmentInput || roughInput}</p>
+                      </div>
+                      <div className="wizard-confirmation__section">
+                        <h4>Problem</h4>
+                        <p>{wizardSelectedProblem || customProblemInput}</p>
+                      </div>
+                      <div className="wizard-confirmation__section wizard-confirmation__section--icp">
+                        <h4>ICP Preview</h4>
+                        <p>{buildIcpDescription(
+                          wizardSelectedSegment || customSegmentInput || roughInput,
+                          wizardSelectedProblem || customProblemInput
+                        )}</p>
+                      </div>
+                    </div>
+
+                    <div className="wizard-nav">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWizardStep('problem')
                         }}
                         disabled={isDiscovering}
                       >
@@ -936,7 +1013,7 @@ export default function Page() {
                         type="button"
                         className="primary"
                         onClick={handleStartResearch}
-                        disabled={isDiscovering || (!wizardSelectedProblem && !customProblemInput.trim())}
+                        disabled={isDiscovering}
                       >
                         {isDiscovering ? 'Starting...' : 'Start Research'}
                       </button>
