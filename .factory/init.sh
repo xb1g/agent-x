@@ -3,14 +3,13 @@ set -e
 
 cd /Users/bunyasit/dev/agent-x
 
-# Install dependencies (idempotent)
-pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-
-# Kill any existing dev server on port 3100 (idempotent)
+# Kill any existing dev servers that would block new ones
 lsof -ti :3100 | xargs kill 2>/dev/null || true
-
-# Kill any existing dev server on port 3000 that might interfere
-# (Next.js refuses to start if another next dev is running)
 lsof -ti :3000 | xargs kill 2>/dev/null || true
+
+# Install deps if needed
+if [ ! -d node_modules ]; then
+  pnpm install
+fi
 
 echo "Init complete"
